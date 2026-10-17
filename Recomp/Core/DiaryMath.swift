@@ -17,6 +17,24 @@ enum DiaryMath {
         let selection = DaySelection(day: day, calendar: calendar)
         return entries.filter { selection.contains(date: $0.date, clock: $0.clock) }
     }
+    /// Search the full local diary, independent of the selected day or favourites.
+    /// Each word can match a different field, so "chicken lunch" finds named meals
+    /// containing chicken even when the meal's title does not list its ingredients.
+    static func foodHistory(in entries: [FoodEntry], query: String = "", excludingID: UUID? = nil,
+                            deletedIDs: Set<UUID> = [], now: Date = Date()) -> [FoodEntry] {
+        let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        return entries.filter { entry in
+            guard entry.id != excludingID, !deletedIDs.contains(entry.id),
+                  entry.date.timeIntervalSinceReferenceDate.isFinite, entry.date <= now else { return false }
+            guard !words.isEmpty else { return true }
+            let fields = [entry.name, entry.note, entry.meal.rawValue] +
+                (entry.aiDraft?.estimate.items.flatMap { [$0.name, $0.portion] } ?? [])
+            return words.allSatisfy { word in fields.contains { $0.localizedStandardContains(word) } }
+        }.sorted {
+            if $0.date != $1.date { return $0.date > $1.date }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
     private struct DaySelection {
         let key: String
         let interval: DateInterval

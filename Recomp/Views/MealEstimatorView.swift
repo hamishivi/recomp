@@ -3,11 +3,12 @@ import PhotosUI
 import AVFoundation
 
 private enum FoodSheet: Identifiable {
-    case settings, usuals, ingredient(EstimatedFood), photo(MealPhoto)
+    case settings, usuals, mealHistory, ingredient(EstimatedFood), photo(MealPhoto)
     var id: String {
         switch self {
         case .settings: return "settings"
         case .usuals: return "usuals"
+        case .mealHistory: return "mealHistory"
         case .ingredient(let food): return "food:" + food.id
         case .photo(let photo): return "photo:" + photo.id.uuidString
         }
@@ -105,6 +106,10 @@ struct MealEstimatorView: View {
                 case .settings: EstimatorSettingsView()
                 case .usuals:
                     SavedFoodPicker(replacing: model.total.containsFood) { model.useTemplate($0) }
+                case .mealHistory:
+                    FoodHistoryPicker(replacing: model.total.containsFood, excludingID: model.original?.id) {
+                        model.useHistoricalFood($0)
+                    }
                 case .ingredient(let food):
                     EstimatedFoodEditor(food: food, locked: model.editorLock(for: food),
                         onDelete: ingredientRemoval(for: food)
@@ -158,6 +163,8 @@ struct MealEstimatorView: View {
                 .accessibilityIdentifier("food.name").disabled(model.busy)
             Button { sheet = .usuals } label: { Label("Your usuals", systemImage: "bookmark") }
                 .accessibilityIdentifier("food.usuals").disabled(model.busy || importing)
+            Button { sheet = .mealHistory } label: { Label("Meal history", systemImage: "clock.arrow.circlepath") }
+                .accessibilityIdentifier("food.history").disabled(model.busy || importing)
         }
     }
     private var photoSection: some View {
@@ -500,4 +507,68 @@ struct SavedFoodPicker: View {
         }
     }
     private func choose(_ food: FoodTemplate) { onSelect(food); dismiss() }
+}
+
+@MainActor
+struct FoodHistoryPicker: View {
+    @EnvironmentObject private var diary: DiaryStore
+    @Environment(\.dismiss) private var dismiss
+    let replacing: Bool
+    let excludingID: UUID?
+    let onSelect: (FoodEntry) -> Void
+    @State private var search = ""
+    @State private var pending: FoodEntry?
+
+    var body: some View {
+        let meals = DiaryMath.foodHistory(in: diary.state.entries, query: search,
+            excludingID: excludingID, deletedIDs: diary.state.deletedIDs("food"))
+        NavigationStack {
+            List {
+                if !meals.isEmpty {
+                    Section {
+                        ForEach(meals) { entry in
+                            Button {
+                                if replacing { pending = entry } else { choose(entry) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(entry.name).foregroundStyle(Theme.ink)
+                                    Text(EntryClock.label(date: entry.date, clock: entry.clock))
+                                        .font(.caption).foregroundStyle(Theme.muted)
+                                    Text("\(entry.meal.rawValue) · \(entry.nutrition.calories.wholeNumber) kcal · \(entry.nutrition.protein.wholeNumber) g protein\(entry.isEstimate ? " · Estimated" : "")")
+                                        .font(.caption).foregroundStyle(Theme.muted)
+                                    if !entry.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text(entry.note).font(.caption).foregroundStyle(Theme.muted).lineLimit(2)
+                                    }
+                                }.padding(.vertical, 4)
+                            }.accessibilityIdentifier("food.historyChoice")
+                        }
+                    } header: {
+                        Text("Newest first")
+                    } footer: {
+                        Text("Choose a meal to fill your draft, then review the serving and save. Your usuals stay separate.")
+                    }
+                }
+            }
+            .overlay {
+                if meals.isEmpty {
+                    if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        ContentUnavailableView(excludingID == nil ? "No meal history yet" : "No other meals yet", systemImage: "clock.arrow.circlepath",
+                            description: Text("Meals you log appear here so you can use them again, separate from your usuals."))
+                    } else {
+                        ContentUnavailableView.search(text: search)
+                    }
+                }
+            }
+            .searchable(text: $search, prompt: "Names, ingredients, notes")
+            .instrumentForm().navigationTitle("Meal history").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .confirmationDialog("Replace the current food?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
+                Button("Replace") { if let entry = pending { choose(entry) }; pending = nil }
+                Button("Cancel", role: .cancel) { pending = nil }
+            } message: {
+                Text("The food and nutrition will change. Photos, time and notes will stay. The previous meal won’t change.")
+            }
+        }
+    }
+    private func choose(_ entry: FoodEntry) { onSelect(entry); dismiss() }
 }

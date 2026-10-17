@@ -4,7 +4,7 @@ A native SwiftUI app for food logging, body measurements, and estimated energy e
 
 ## Features
 
-- Food diary with calorie and macro totals, saved foods, and reviewed photo/text estimates.
+- Food diary with calorie and macro totals, searchable meal history, saved foods, and reviewed photo/text estimates.
 - Weight, body measurements, and DXA records, with comparisons that respect different scales.
 - Maintenance estimates from complete food logs and comparable weight trends.
 - An interactive calorie-burn chart with estimated burn, a day forecast, maintenance reference, and workout markers.
@@ -20,6 +20,12 @@ A native SwiftUI app for food logging, body measurements, and estimated energy e
 The local diary and interface previews work without an AI server or API key. Enable Apple Health connections separately if desired. To explore the chart without personal records, open **Settings → Interface preview → Burn**.
 
 For an existing installation, preserve its bundle identifier, signing team, and App Group. Export a backup and install over the app; uninstalling removes local records.
+
+## Meal history
+
+Open **Log food → Meal history** to search all previously logged meals, newest first. Search matches names, ingredients, portions, meal types, and notes, including older records. History is separate from **Your usuals** and needs no migration.
+
+Choosing a meal fills the current draft for review; it is logged only when you press **Save**. The ingredient breakdown and estimate status are retained. The current date, meal type, notes, and photos stay in place, and **Undo** restores the previous food. Historical photos and Health export receipts are never copied. The original record stays unchanged; deleted meals and the entry currently being edited are excluded.
 
 ## Calorie-burn model
 
@@ -43,6 +49,8 @@ swift test -c release
 ```
 
 The October 17, 2026 chart update passed 442 core tests in both Debug and Release, 158 interface/source checks, and two focused iPhone simulator UI tests. The simulator Release app/widget build also passed. Chart screenshots were checked in light appearance and dark appearance with the largest accessibility text size. These checks do not establish real-world energy accuracy or replace a complete device accessibility audit.
+
+The subsequent [meal history update](Verification/FoodHistory/README.md) passed 447 core tests in both Debug and Release, 70 composer checks, 41 composer polish regressions, 158 interface/source checks, and four focused iPhone simulator UI cases. Debug simulator and signed Release iPhone app/widget builds passed; the history picker was checked in light appearance and dark appearance with the largest accessibility text size.
 
 Build products, raw local diagnostics, device metadata, personal diary exports, and credentials are excluded from Git. Files under `Examples/` and the backup interoperability fixture contain synthetic test data. Older verification reports describe their original versions; referenced raw logs remain local.
 

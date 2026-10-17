@@ -119,6 +119,96 @@ final class RecompUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Discard"].waitForExistence(timeout: 3)); app.buttons["Discard"].tap()
         XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 0)
     }
+    func testHistorySearchReusesOlderMealAndKeepsUsualsSeparate() {
+        app.buttons["Previous day"].tap()
+        addFood()
+        app.buttons["Next day"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 0)
+        app.buttons["food.log"].tap()
+        app.buttons["food.history"].tap()
+        XCTAssertTrue(app.navigationBars["Meal history"].waitForExistence(timeout: 5))
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 3)); search.tap()
+        search.typeText("synthetic meal")
+        let choice = app.buttons.matching(identifier: "food.historyChoice").firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 3))
+        XCTAssertTrue(choice.label.contains("500 kcal"))
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Meal history - search older meal"; image.lifetime = .keepAlways; add(image)
+        choice.tap()
+        XCTAssertTrue(app.navigationBars["Log food"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["food.name"].value as? String, "Synthetic UI meal")
+        XCTAssertEqual(app.textFields["nutrition.calories"].value as? String, "500")
+        app.buttons["food.save"].tap()
+        XCTAssertTrue(app.buttons.matching(identifier: "food.entry").firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 1)
+        app.buttons["Previous day"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 1)
+        app.buttons["Next day"].tap()
+        app.buttons["food.log"].tap()
+        app.buttons["food.usuals"].tap()
+        XCTAssertTrue(app.navigationBars["Your usuals"].waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(app.buttons.matching(identifier: "food.savedChoice").count, 0)
+        XCTAssertFalse(app.buttons.matching(identifier: "food.savedChoice").allElementsBoundByIndex.contains { $0.label.contains("Synthetic UI meal") })
+    }
+    func testHistoryReplacementUndoAndDiscardDoNotLog() {
+        addFood()
+        app.buttons["food.log"].tap()
+        replace("food.name", with: "New draft")
+        replace("nutrition.calories", with: "700")
+        app.buttons["Done"].tap()
+        for _ in 0..<6 { if app.buttons["food.history"].isHittable { break }; app.swipeDown() }
+        app.buttons["food.history"].tap()
+        let choice = app.buttons.matching(identifier: "food.historyChoice").firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tap()
+        XCTAssertTrue(app.buttons["Replace"].waitForExistence(timeout: 3))
+        app.buttons["Replace"].tap()
+        XCTAssertTrue(app.navigationBars["Log food"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["nutrition.calories"].value as? String, "500")
+        app.buttons["food.undo"].tap()
+        XCTAssertEqual(app.textFields["food.name"].value as? String, "New draft")
+        XCTAssertEqual(app.textFields["nutrition.calories"].value as? String, "700")
+        app.navigationBars.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Discard"].waitForExistence(timeout: 3)); app.buttons["Discard"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 1)
+    }
+    func testHistoryEmptySearchAndEditingExclusion() {
+        app.buttons["food.log"].tap()
+        app.buttons["food.history"].tap()
+        XCTAssertTrue(app.staticTexts["No meal history yet"].waitForExistence(timeout: 5))
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText("nothing here")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'no results'")).firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.buttons.matching(identifier: "food.historyChoice").count, 0)
+        let endSearch = app.buttons.matching(NSPredicate(format: "label == 'close' OR label CONTAINS[c] 'cancel'"))
+            .allElementsBoundByIndex.first { $0.isHittable }
+        XCTAssertNotNil(endSearch, app.debugDescription); endSearch?.tap()
+        app.navigationBars["Meal history"].buttons["Cancel"].tap()
+        app.navigationBars["Log food"].buttons["Cancel"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 0)
+        addFood()
+        app.buttons.matching(identifier: "food.entry").firstMatch.tap()
+        app.buttons["food.history"].tap()
+        XCTAssertTrue(app.staticTexts["No other meals yet"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "food.historyChoice").count, 0)
+    }
+    func testHistorySupportsDarkAppearanceAndLargestText() {
+        addFood()
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "--reset-test-diary" }
+        app.launchArguments += ["-recomp.interface.appearance", "dark", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        XCTAssertTrue(app.buttons["food.log"].waitForExistence(timeout: 10)); app.buttons["food.log"].tap()
+        app.buttons["food.history"].tap()
+        let choice = app.buttons.matching(identifier: "food.historyChoice").firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 5))
+        XCTAssertTrue(choice.isHittable)
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Meal history - dark largest text"; image.lifetime = .keepAlways; add(image)
+        choice.tap()
+        XCTAssertTrue(app.navigationBars["Log food"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["food.save"].isEnabled)
+    }
     func testSavedFoodsSettingsIsSubmenu() {
         app.tabBars.buttons["Settings"].tap()
         let row = app.buttons["settings.usuals"]

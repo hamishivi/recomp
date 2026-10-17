@@ -129,6 +129,60 @@ import Foundation
         let noPhotos = MealEstimatorModel(date: now)
         noPhotos.rename("Known label"); noPhotos.setManualTotal(calories); noPhotos.setEstimated(false)
         check(noPhotos.canSave && noPhotos.entry()?.photos == nil, "manual logging without photos remains available")
+
+        let oldItems = [
+            EstimatedFood(id: "old-rice", name: "Brown rice", portion: "1 cup", nutrition: Nutrition(calories: 210, protein: 5, carbs: 44, fat: 2),
+                          evidence: [FoodEvidence(kind: .visual, photoNumber: 1, detail: "Rice in the old photo.")]),
+            EstimatedFood(id: "old-chicken", name: "Chicken", portion: "150 g", nutrition: Nutrition(calories: 250, protein: 46, fat: 6))
+        ]
+        let oldEstimate = MealEstimate(title: "Chicken bowl", items: oldItems, questions: ["Was there extra sauce?"])
+        var historySource = FoodEntry(name: "Chicken bowl", date: now.addingTimeInterval(-800 * 86400), meal: .dinner,
+            nutrition: oldEstimate.total, isEstimate: true, note: "Old meal notes", version: 9,
+            exportedVersions: ["calories": 9], lastExportedAt: now.addingTimeInterval(-86400),
+            aiDraft: EstimateDraft(estimate: oldEstimate, context: "An old photo description", excludedFoods: ["Sauce"]),
+            photos: [photo])
+        historySource.clock = EntryClock(date: historySource.date, timeZoneID: "Europe/London")
+        let sourceBefore = historySource, diaryBeforeHistory = store.state
+        let fromHistory = MealEstimatorModel(date: now)
+        let currentPhoto = MealPhoto(jpeg: photo.jpeg, caption: "Today's photo")
+        fromHistory.note = "Today's notes"; fromHistory.meal = .snack
+        fromHistory.zoneID = "Australia/Sydney"; fromHistory.photos = [currentPhoto]
+        fromHistory.useHistoricalFood(historySource)
+        let historyCopy = fromHistory.entry()!
+        check(fromHistory.foodName == historySource.name && fromHistory.total == historySource.nutrition && fromHistory.estimated, "history copies recorded nutrition and estimate status")
+        check(historyCopy.id != historySource.id && fromHistory.entry()?.id == historyCopy.id, "history gets one stable fresh entry identity")
+        check(historyCopy.date == now && historyCopy.meal == .snack && historyCopy.clock?.timeZoneID == "Australia/Sydney", "history retains the current date, meal and timezone")
+        check(historyCopy.note == "Today's notes" && historyCopy.photos == [currentPhoto] && !fromHistory.makeTemplate, "history preserves current notes/photos without creating a favourite")
+        check(historyCopy.version == 1 && historyCopy.exportedVersions.isEmpty && historyCopy.lastExportedAt == nil, "history never copies source version or Health receipts")
+        check(fromHistory.draft?.estimate.items.map(\.nutrition) == oldItems.map(\.nutrition) && fromHistory.draft?.lockedItemIDs.count == 2, "history preserves and protects the ingredient breakdown")
+        check(Set(fromHistory.draft!.estimate.items.map(\.id)).isDisjoint(with: Set(oldItems.map(\.id))), "copied ingredients have fresh IDs")
+        check(fromHistory.draft!.estimate.items.allSatisfy { $0.evidence?.allSatisfy { $0.kind == .details && $0.photoNumber == nil } == true }, "historical photo evidence is replaced with copy provenance")
+        check(fromHistory.followUpQuestion == nil && fromHistory.draft?.excludedFoods.isEmpty == true && fromHistory.description == historySource.name, "old AI follow-up and context do not leak into the new meal")
+        check(historySource == sourceBefore && store.state == diaryBeforeHistory && h.foodSaves.isEmpty, "history selection leaves source, favourites, diary and Health untouched")
+        fromHistory.scalePortion(by: 0.5)
+        check(fromHistory.total == historySource.nutrition.scaled(by: 0.5) && fromHistory.draft?.estimate.items.count == 2, "historical meal portions can be adjusted without losing the breakdown")
+        fromHistory.undo(); fromHistory.undo()
+        check(fromHistory.total == .zero && fromHistory.foodName.isEmpty && fromHistory.photos == [currentPhoto] && fromHistory.note == "Today's notes", "undo returns to the prior draft while keeping today's attachments and notes")
+        let revision = fromHistory.inputRevision
+        fromHistory.setManualTotal(nil); fromHistory.useHistoricalFood(historySource)
+        check(fromHistory.manualInputValid && fromHistory.canSave && fromHistory.inputRevision > revision, "history repairs invalid manual fields through the canonical input revision")
+        let editingHistory = MealEstimatorModel(date: now, original: saved)
+        editingHistory.useHistoricalFood(historySource)
+        check(editingHistory.entry()?.id == saved.id && editingHistory.date == saved.date, "history in an editor keeps the entry being edited")
+        editingHistory.undo()
+        check(editingHistory.total == saved.nutrition && editingHistory.foodName == saved.name && !editingHistory.estimated, "undo history restores the existing meal and verified status")
+        let historyStore = DiaryStore(fileURL: dir.appendingPathComponent("history.json"), health: HealthKitService())
+        let usualsBefore = historyStore.state.templates
+        check(historyStore.saveEntry(historySource, makeTemplate: false) && historyStore.saveEntry(fromHistory.entry()!, makeTemplate: fromHistory.makeTemplate), "only explicit Save logs a reused meal")
+        check(historyStore.state.entries.count == 2 && historyStore.state.templates == usualsBefore, "saving from history adds a separate diary entry without adding a favourite")
+        let reloadedHistory = DiaryStore(fileURL: dir.appendingPathComponent("history.json"), health: HealthKitService())
+        check(reloadedHistory.state.entries.count == 2 && reloadedHistory.state.entries.contains { $0.id == fromHistory.entry()?.id }, "historical copies survive file round trip alongside the source")
+        let largeHistory = MealEstimatorModel(date: now)
+        largeHistory.useHistoricalFood(FoodEntry(name: String(repeating: "n", count: 190), date: now, meal: .lunch, nutrition: Nutrition(calories: 25000, protein: 3500)))
+        check(largeHistory.canSave && largeHistory.foodName.count == 190 && largeHistory.entry()?.aiDraft == nil, "history supports legal manual values outside the AI schema")
+        let noHistoryPhotos = MealEstimatorModel(date: now)
+        noHistoryPhotos.useHistoricalFood(historySource)
+        check(noHistoryPhotos.photos.isEmpty && noHistoryPhotos.entry()?.photos == nil, "old photos are never silently copied into a new meal")
         check(failures == 0, "all composer scenarios complete")
         print("\(checks) composer checks; \(failures) failures. Production models/store; observation, Health and AI are test doubles. No native UI.")
         if failures > 0 { exit(1) }

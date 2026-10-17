@@ -316,6 +316,31 @@ final class MealEstimatorModel: ObservableObject {
         draft = next.isValid ? next : nil
         description = template.name; clarification = ""; replacedNutrition()
     }
+    /// Copy reviewed values into this draft. The source identity, capture time,
+    /// notes, photos and Health export receipts belong to the old diary record.
+    func useHistoricalFood(_ entry: FoodEntry) {
+        guard !busy, entry.isValid else { return }
+        pushHistory(checkpoint("meal from history")); previousTotal = total
+        foodName = entry.name; total = entry.nutrition; estimateOverride = entry.isEstimate
+        let provenance = [FoodEvidence(kind: .details, detail: "Values copied from a previously logged meal. Review the serving for this meal.")]
+        let items: [EstimatedFood]
+        if let saved = entry.aiDraft {
+            items = saved.estimate.items.map { food in
+                var copy = food
+                copy.id = UUID().uuidString
+                // Old photo references must never point at this draft's photos.
+                copy.evidence = provenance
+                return copy
+            }
+        } else {
+            items = [EstimatedFood(name: String(entry.name.prefix(160)), portion: "Recorded serving",
+                                   nutrition: entry.nutrition, evidence: provenance)]
+        }
+        let next = EstimateDraft(estimate: MealEstimate(title: String(entry.name.prefix(160)), items: items),
+                                 context: entry.name, lockedItemIDs: Set(items.map(\.id)))
+        draft = next.isValid ? next : nil
+        description = entry.name; clarification = ""; replacedNutrition()
+    }
     func undo() {
         guard !busy, let old = history.popLast() else { return }
         previousTotal = total

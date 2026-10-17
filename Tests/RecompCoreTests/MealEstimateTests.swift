@@ -3,6 +3,52 @@ import XCTest
 @testable import RecompCore
 #endif
 
+final class FoodHistoryTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private func entry(_ name: String, daysAgo: Double = 0, meal: MealKind = .lunch) -> FoodEntry {
+        FoodEntry(name: name, date: now.addingTimeInterval(-daysAgo * 86400), meal: meal,
+                  nutrition: Nutrition(calories: 400, protein: 25, carbs: 45, fat: 15))
+    }
+    func testHistoryIncludesOlderMealsAndSortsNewestFirst() {
+        let older = entry("Old recipe", daysAgo: 800), recent = entry("Recent meal", daysAgo: 1)
+        let today = entry("Today's meal")
+        let records = [older, today, recent]
+        XCTAssertEqual(DiaryMath.foodHistory(in: records, now: now).map(\.id), [today.id, recent.id, older.id])
+        XCTAssertEqual(DiaryMath.foodHistory(in: records, query: "old recipe", now: now), [older])
+        XCTAssertEqual(records, [older, today, recent])
+    }
+    func testHistorySearchMatchesWordsAcrossNamesIngredientsPortionsAndNotes() {
+        var bowl = entry("Lunch bowl", daysAgo: 120)
+        let items = [EstimatedFood(name: "Grilled chicken", portion: "150 grams", nutrition: bowl.nutrition)]
+        bowl.aiDraft = EstimateDraft(estimate: MealEstimate(title: bowl.name, items: items))
+        bowl.note = "Café recipe with lemon"
+        XCTAssertTrue(bowl.isValid)
+        for query in ["CHICKEN", "cafe", "LUNCH lemon", "bowl 150", "  grilled\n recipe  "] {
+            XCTAssertEqual(DiaryMath.foodHistory(in: [bowl], query: query, now: now), [bowl], query)
+        }
+        XCTAssertTrue(DiaryMath.foodHistory(in: [bowl], query: "chicken pasta", now: now).isEmpty)
+    }
+    func testHistorySearchesMealKindWithoutRequiringItInName() {
+        let eggs = entry("Eggs", meal: .breakfast)
+        XCTAssertEqual(DiaryMath.foodHistory(in: [eggs], query: "eggs breakfast", now: now), [eggs])
+        XCTAssertTrue(DiaryMath.foodHistory(in: [eggs], query: "dinner", now: now).isEmpty)
+    }
+    func testHistoryExcludesCurrentDeletedAndFutureEntries() {
+        let current = entry("Editing"), deleted = entry("Deleted"), future = entry("Tomorrow", daysAgo: -1)
+        let kept = entry("Saved", daysAgo: 5)
+        XCTAssertEqual(DiaryMath.foodHistory(in: [current, deleted, future, kept], excludingID: current.id,
+                                            deletedIDs: [deleted.id], now: now), [kept])
+    }
+    func testHistoryTieOrderIsStableAndBlankQueryReturnsAll() {
+        var a = entry("A"), b = entry("B")
+        a.id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        b.id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        XCTAssertEqual(DiaryMath.foodHistory(in: [b, a], query: " \n ", now: now), [a, b])
+        XCTAssertEqual(DiaryMath.foodHistory(in: [a, b], now: now), [a, b])
+        XCTAssertTrue(DiaryMath.foodHistory(in: [], now: now).isEmpty)
+    }
+}
+
 final class MealEstimateTests: XCTestCase {
     private func rice(_ id: String = "rice") -> EstimatedFood {
         EstimatedFood(id: id, name: "Cooked rice", portion: "1 cup cooked", nutrition: Nutrition(calories: 200, protein: 4, carbs: 44, fat: 0.4))
