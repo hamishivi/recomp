@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#F2F1EC"/>
+  <!-- Three original level tracks: no brand marks or third-party artwork. -->
+  <g fill="#B8BCAF"><rect x="214" y="228" width="132" height="568" rx="10"/><rect x="446" y="228" width="132" height="568" rx="10"/><rect x="678" y="228" width="132" height="568" rx="10"/></g>
+  <g fill="#252720"><rect x="214" y="446" width="132" height="350" rx="10"/><rect x="446" y="322" width="132" height="474" rx="10"/><rect x="678" y="530" width="132" height="266" rx="10"/></g>
+  <rect x="422" y="338" width="180" height="38" rx="4" fill="#F36A38"/>
+</svg>

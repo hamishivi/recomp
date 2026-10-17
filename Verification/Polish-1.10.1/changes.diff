@@ -1,0 +1,1925 @@
+--- a/Recomp/Core/AdaptiveModels.swift
++++ b/Recomp/Core/AdaptiveModels.swift
+@@ -163,6 +163,9 @@
+ 
+ 
+ enum AnalysisCSV {
++    static func hasRecords(in state: AppState) -> Bool {
++        !state.dayReviews.isEmpty || !state.maintenanceHistory.isEmpty || !state.targetRevisions.isEmpty
++    }
+     static func make(state: AppState) -> String {
+         let formatter = ISO8601DateFormatter()
+         let header = "record_type,date,calories_kcal,protein_g,carbs_g,fat_g,maintenance_low,maintenance_high,weight_kg_per_week,details"
+--- a/Recomp/Core/MealAttachments.swift
++++ b/Recomp/Core/MealAttachments.swift
+@@ -56,3 +56,16 @@
+         return photos.reduce(0) { $0 + $1.jpeg.count } <= 48 * 1024 * 1024
+     }
+ }
++
++/// Only the active photo-picker batch may commit or clear the loading state.
++/// No image data or platform API is retained here.
++struct PhotoImportSession: Equatable {
++    private(set) var ticket: UUID?
++    var isActive: Bool { ticket != nil }
++    mutating func begin() -> UUID { let next = UUID(); ticket = next; return next }
++    func accepts(_ value: UUID) -> Bool { ticket == value }
++    @discardableResult mutating func finish(_ value: UUID) -> Bool {
++        guard accepts(value) else { return false }; ticket = nil; return true
++    }
++    mutating func cancel() { ticket = nil }
++}
+--- a/Recomp/Services/MealEstimatorModel.swift
++++ b/Recomp/Services/MealEstimatorModel.swift
+@@ -1,20 +1,44 @@
+ import Foundation
+ import Combine
+ 
++/// Undo stores the complete food edit, not only its optional AI breakdown.
++/// Photos/time/notes are independent: undoing nutrition never removes attachments or moves a meal.
++struct FoodEditSnapshot {
++    var action: String
++    var name: String
++    var total: Nutrition
++    var draft: EstimateDraft?
++    var description: String
++    var clarification: String
++    var estimateOverride: Bool?
++    var usedAI: Bool
++    var photoRevision: UUID
++    var lastSubmittedPhotoRevision: UUID
++}
++
+ @MainActor
+ final class MealEstimatorModel: ObservableObject {
+-    // Manual values, photos and AI revisions share one draft. No save happens here.
+     @Published var foodName = ""
+     @Published private(set) var total = Nutrition.zero
+     @Published private(set) var manualInputValid = true
+     @Published private(set) var estimateOverride: Bool?
+     @Published var description = ""
+     @Published var clarification = ""
+-    @Published var photos: [MealPhoto] = []
++    @Published var photos: [MealPhoto] = [] {
++        didSet {
++            guard observingPhotos, photos != oldValue else { return }
++            photoRevision = UUID()
++            // Source numbers are positional. Invalidate them as soon as evidence changes,
++            // not only on save or the next AI request.
++            draft?.clearPhotoReferences()
++        }
++    }
+     @Published private(set) var draft: EstimateDraft?
+     @Published private(set) var previousTotal: Nutrition?
+     @Published private(set) var busy = false
+-    @Published private(set) var history: [EstimateDraft] = []
++    @Published private(set) var history: [FoodEditSnapshot] = []
++    /// A canonical replacement can repair invalid field text even when the total is unchanged.
++    @Published private(set) var inputRevision = 0
+     @Published var error: String?
+     @Published var date: Date
+     @Published var zoneID: String
+@@ -23,26 +47,30 @@
+     @Published var note: String
+     @Published var makeTemplate = false
+     @Published var keepPhotos = true
+-    private var lastSubmittedPhotos: [MealPhoto] = []
++    private var observingPhotos = false
++    private var photoRevision = UUID()
++    private var lastSubmittedPhotoRevision = UUID()
+     private var requestTask: Task<Void, Never>?
+     private var requestGeneration = 0
+     private var usedAI = false
+     private let entryID: UUID
+     private let initialDraft: EstimateDraft?
++    private let initialDescription: String
+     private let seed: FoodEntry?
+     private var composingManually = false
++    let original: FoodEntry?
++    private static let photoReviewDetail = "Review the updated photo evidence without reapplying earlier corrections."
++
+     var estimated: Bool {
+         estimateOverride ?? ((original ?? seed).map { $0.isEstimate || usedAI || $0.nutrition != total } ?? (usedAI || draft != nil))
+     }
+-    func setEstimated(_ value: Bool) { guard !busy else { return }; estimateOverride = value }
+     var isExistingMeal: Bool { original != nil }
+     var timezoneNeedsReview: Bool { original?.clock?.needsReview == true }
+-    private static let photoReviewDetail = "Review the updated photo evidence without reapplying earlier corrections."
+-    let original: FoodEntry?
++    var undoTitle: String { history.last.map { "Undo \($0.action)" } ?? "Undo" }
++    func setEstimated(_ value: Bool) { guard !busy else { return }; estimateOverride = value }
+ 
+     init(date: Date, original: FoodEntry? = nil, seed: FoodEntry? = nil) {
+         self.original = original
+-        // A blank Log-food seed supplies a date/meal, not prior nutritional evidence.
+         self.seed = seed.flatMap { $0.nutrition.containsFood ? $0 : nil }
+         let starting = original ?? seed
+         self.foodName = starting?.name ?? ""
+@@ -53,8 +81,6 @@
+         self.confirmedZone = starting?.clock?.needsReview != true
+         self.meal = starting?.meal ?? .suggested(at: date)
+         self.note = starting?.note ?? ""
+-        // Editing aggregate macros intentionally clears an outdated ingredient breakdown.
+-        // Retained photos must not then turn a corrected meal back into a blank AI estimate.
+         var startingDraft = starting?.aiDraft
+         if startingDraft == nil, let original = starting {
+             let item = EstimatedFood(id: original.id.uuidString + ".aggregate", name: String(original.name.prefix(160)),
+@@ -67,63 +93,84 @@
+         }
+         self.initialDraft = startingDraft
+         self.draft = startingDraft
+-        self.description = starting?.aiDraft?.context ?? starting?.name ?? ""
++        self.initialDescription = starting?.aiDraft?.context ?? starting?.name ?? ""
++        self.description = self.initialDescription
+         self.photos = starting?.photos ?? []
+-        self.lastSubmittedPhotos = self.photos
+-    }
++        self.lastSubmittedPhotoRevision = photoRevision
++        observingPhotos = true
++    }
++
+     func startManual() {
+         guard !busy, draft == nil else { return }
+-        draft = EstimateDraft(estimate: MealEstimate(title: foodName.isEmpty ? "Food" : String(foodName.prefix(160)), items: [], assumptions: [], questions: []), context: description)
++        draft = EstimateDraft(estimate: MealEstimate(title: foodName.isEmpty ? "Food" : String(foodName.prefix(160)), items: []), context: description)
++    }
++    private var photosValid: Bool {
++        photos.count <= MealPhoto.maximumCount && photos.allSatisfy(\.isValid) && Set(photos.map(\.id)).count == photos.count
+     }
+     var canRequest: Bool {
+-        // Invalid/incomplete manual input must not submit a previous valid value.
+-        guard manualInputValid, !(total.containsFood && draft == nil), foodName.count <= 200 else { return false }
+-        guard !busy, photos.count <= MealPhoto.maximumCount, photos.allSatisfy(\.isValid), initialContext.count <= 8000, clarification.count <= 2000 else { return false }
++        guard !busy, manualInputValid, !(total.containsFood && draft == nil),
++              foodName.count <= 200, photosValid, clarification.count <= 2000 else { return false }
+         if let draft {
+             let supplied = clarification.trimmingCharacters(in: .whitespacesAndNewlines)
+             let details = supplied.isEmpty ? Self.photoReviewDetail : supplied
+-            return (!supplied.isEmpty || photos != lastSubmittedPhotos) &&
++            return (!supplied.isEmpty || photoRevision != lastSubmittedPhotoRevision) &&
+                 draft.context.count + details.count + 13 <= 8000 && draft.isValid
+         }
+-        return !initialContext.isEmpty || !photos.isEmpty
++        return initialContext.count <= 8000 && (!initialContext.isEmpty || !photos.isEmpty)
+     }
+     private var initialContext: String {
+         let detail = description.trimmingCharacters(in: .whitespacesAndNewlines)
+         let name = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+         return detail.isEmpty ? name : name.isEmpty || detail == name ? detail : name + "\n" + detail
+     }
+-    var canSave: Bool {
+-        !busy && manualInputValid && total.containsFood && !foodName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+-        foodName.count <= 200 && note.count <= 2000 && date.timeIntervalSince1970.isFinite &&
+-        photos.count <= MealPhoto.maximumCount && photos.allSatisfy(\.isValid) &&
+-        Set(photos.map(\.id)).count == photos.count
+-    }
++    /// Shared by button validation and the form; never silently discard invalid values or clocks.
++    var saveIssue: String? {
++        if !manualInputValid { return "Check the nutrition numbers." }
++        if !total.containsFood { return "Enter nutrition or estimate it from photos or details." }
++        if foodName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Add a food name." }
++        if foodName.count > 200 { return "Keep the food name under 200 characters." }
++        if note.count > 2000 { return "Keep notes under 2,000 characters." }
++        if description.count > 8000 || (draft == nil && initialContext.count > 8000) { return "Shorten the food details to 8,000 characters." }
++        if EntryClock(date: date, timeZoneID: zoneID) == nil { return "Check the entry date and timezone." }
++        if date > Date() { return "Food must be logged at a past or current time." }
++        if !photosValid { return "Check the photos. Choose up to six different attachments." }
++        return nil
++    }
++    var canSave: Bool { !busy && saveIssue == nil }
+     var hasChanges: Bool {
+         if let original {
+-            return foodName != original.name || total != original.nutrition || !manualInputValid || estimated != original.isEstimate || draft != initialDraft || (keepPhotos ? photos : []) != (original.photos ?? []) || !clarification.isEmpty ||
+-                date != original.date || zoneID != (original.clock?.timeZoneID ?? TimeZone.current.identifier) || (original.clock?.needsReview == true && confirmedZone) || meal != original.meal || note != original.note || makeTemplate
+-        }
+-        return draft != nil || !foodName.isEmpty || total.containsFood || !manualInputValid || !photos.isEmpty || !description.isEmpty || !clarification.isEmpty || !note.isEmpty || makeTemplate
++            return foodName != original.name || total != original.nutrition || !manualInputValid || estimated != original.isEstimate ||
++                draft != initialDraft || description != initialDescription || (keepPhotos ? photos : []) != (original.photos ?? []) || !clarification.isEmpty ||
++                date != original.date || zoneID != (original.clock?.timeZoneID ?? TimeZone.current.identifier) ||
++                (original.clock?.needsReview == true && confirmedZone) || meal != original.meal || note != original.note || makeTemplate
++        }
++        return draft != nil || !foodName.isEmpty || total.containsFood || !manualInputValid || !photos.isEmpty ||
++            !description.isEmpty || !clarification.isEmpty || !note.isEmpty || makeTemplate
++    }
++
++    private func checkpoint(_ action: String) -> FoodEditSnapshot {
++        FoodEditSnapshot(action: action, name: foodName, total: total, draft: draft, description: description,
++            clarification: clarification, estimateOverride: estimateOverride, usedAI: usedAI,
++            photoRevision: photoRevision, lastSubmittedPhotoRevision: lastSubmittedPhotoRevision)
++    }
++    private func pushHistory(_ old: FoodEditSnapshot) { history = Array((history + [old]).suffix(20)) }
++    private func replacedNutrition() {
++        manualInputValid = true; composingManually = false; inputRevision &+= 1
+     }
+ 
+     func begin(configuration: EstimatorConfiguration) {
+         guard canRequest else { return }
+-        let historySnapshot = draft
+-        var snapshot = draft
+-        if photos != lastSubmittedPhotos {
+-            // Evidence numbering belongs to the old photo set. In particular, restored
+-            // locked items must never acquire a reference to a different replacement image.
+-            snapshot?.clearPhotoReferences()
+-        }
++        let before = checkpoint("estimate")
++        let snapshot = draft
+         var details = clarification.trimmingCharacters(in: .whitespacesAndNewlines)
+         if snapshot != nil && details.isEmpty { details = Self.photoReviewDetail }
+         let submittedPhotos = photos
++        let submittedRevision = photoRevision
+         let context = snapshot?.context ?? initialContext
+         let input = EstimateRequest(description: context, clarification: snapshot == nil ? "" : details,
+-                                    images: submittedPhotos.map { EstimateImage(base64: $0.jpeg.base64EncodedString(), role: $0.role, caption: $0.caption) },
+-                                    currentEstimate: snapshot?.estimate,
+-                                    lockedItemIDs: Array(snapshot?.lockedItemIDs ?? []).sorted(), excludedFoods: snapshot?.excludedFoods ?? [])
+-        requestGeneration += 1
++            images: submittedPhotos.map { EstimateImage(base64: $0.jpeg.base64EncodedString(), role: $0.role, caption: $0.caption) },
++            currentEstimate: snapshot?.estimate, lockedItemIDs: Array(snapshot?.lockedItemIDs ?? []).sorted(), excludedFoods: snapshot?.excludedFoods ?? [])
++        requestGeneration &+= 1
+         let generation = requestGeneration
+         busy = true; error = nil
+         requestTask = Task {
+@@ -131,15 +178,18 @@
+                 let response = try await EstimationService.estimate(input, configuration: configuration)
+                 try Task.checkCancellation()
+                 guard generation == requestGeneration else { return }
+-                if let snapshot {
+-                    let next = try snapshot.refined(with: response, clarification: details)
+-                    pushHistory(historySnapshot ?? snapshot); previousTotal = snapshot.estimate.total; draft = next
+-                } else { draft = EstimateDraft(estimate: response, context: context) }
+-                usedAI = true; estimateOverride = nil; composingManually = false
+-                if let draft { foodName = draft.estimate.title; total = draft.estimate.total }
+-                manualInputValid = true
+-                lastSubmittedPhotos = submittedPhotos
+-                clarification = ""
++                guard photoRevision == submittedRevision else { throw EstimateError.rejected("Photos changed. Review them and estimate again.") }
++                let next: EstimateDraft
++                if let snapshot { next = try snapshot.refined(with: response, clarification: details) }
++                else {
++                    next = EstimateDraft(estimate: response, context: context)
++                    guard next.isValid else { throw EstimateError.invalidResponse }
++                }
++                pushHistory(before); previousTotal = before.total; draft = next
++                usedAI = true; estimateOverride = nil
++                foodName = next.estimate.title; total = next.estimate.total
++                lastSubmittedPhotoRevision = submittedRevision; clarification = ""
++                replacedNutrition()
+             } catch is CancellationError { }
+             catch {
+                 if generation == requestGeneration && !Task.isCancelled {
+@@ -151,28 +201,35 @@
+         }
+     }
+     func cancelRequest() {
+-        requestGeneration += 1; requestTask?.cancel(); requestTask = nil; busy = false
+-    }
+-    private func pushHistory(_ old: EstimateDraft) { history = Array((history + [old]).suffix(20)) }
++        requestGeneration &+= 1; requestTask?.cancel(); requestTask = nil; busy = false
++    }
+     func edit(_ food: EstimatedFood, locked: Bool) {
+         guard !busy, var next = draft else { return }
+-        let old = next; next.edit(food, locked: locked)
+-        guard next.isValid else { error = "Check the food values and portion description."; return }
+-        pushHistory(old); previousTotal = old.estimate.total; draft = next
+-        total = next.estimate.total; manualInputValid = true; composingManually = false; estimateOverride = nil
++        guard food.isValid else { error = "Check the food values and portion."; return }
++        let old = checkpoint("food edit")
++        next.edit(food, locked: locked)
++        guard next.isValid else { error = "Check the food values and portion."; return }
++        guard next != draft else { return }
++        pushHistory(old); previousTotal = total; draft = next
++        total = next.estimate.total; estimateOverride = nil
+         if foodName.isEmpty { foodName = next.estimate.title }
++        replacedNutrition()
++    }
++    func editorLock(for food: EstimatedFood) -> Bool {
++        guard let draft, draft.estimate.items.contains(where: { $0.id == food.id }) else { return true }
++        return draft.lockedItemIDs.contains(food.id)
+     }
+     func addBlankFood() -> EstimatedFood { EstimatedFood(name: "", portion: "1 serving", nutrition: .zero) }
+     func remove(_ id: String) {
+-        guard !busy, var next = draft else { return }
+-        pushHistory(next); previousTotal = next.estimate.total; next.remove(id); draft = next
+-        total = next.estimate.total; manualInputValid = true; estimateOverride = nil
++        guard !busy, var next = draft, next.estimate.items.contains(where: { $0.id == id }) else { return }
++        pushHistory(checkpoint("remove food")); previousTotal = total; next.remove(id); draft = next
++        total = next.estimate.total; estimateOverride = nil; replacedNutrition()
+     }
+     func toggleLock(_ id: String) {
+-        guard !busy, var next = draft else { return }
+-        pushHistory(next)
++        guard !busy, var next = draft, next.estimate.items.contains(where: { $0.id == id }) else { return }
++        pushHistory(checkpoint("lock change"))
+         if next.lockedItemIDs.contains(id) { next.lockedItemIDs.remove(id) } else { next.lockedItemIDs.insert(id) }
+-        draft = next
++        draft = next; composingManually = false
+     }
+     func rename(_ text: String) {
+         guard !busy else { return }
+@@ -180,72 +237,89 @@
+         draft?.estimate.title = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Food" : String(text.prefix(160))
+     }
+ 
+-    /// Aggregate edits replace stale ingredients with one protected total, without a network request.
+-    /// Keep malformed field text in the view; block both saving and requesting until it is corrected.
++    /// Group consecutive typing as one undo step. The view retains invalid text until corrected.
+     func setManualTotal(_ value: Nutrition?) {
+         guard !busy else { return }
+-        guard let value, value.isValid else { manualInputValid = false; return }
++        guard let value, value.isValid else {
++            if !composingManually { pushHistory(checkpoint("nutrition edit")); previousTotal = total }
++            composingManually = true; manualInputValid = false; return
++        }
+         manualInputValid = true
+         guard value != total else { return }
+-        if !composingManually, let old = draft { pushHistory(old); previousTotal = total }
++        if !composingManually { pushHistory(checkpoint("nutrition edit")); previousTotal = total }
+         let context = draft?.context ?? initialContext
+         total = value; composingManually = true
+         let item = EstimatedFood(id: entryID.uuidString + ".manual", name: foodName.isEmpty ? "Food" : String(foodName.prefix(160)),
+-            portion: "Entered total", nutrition: value, assumptions: [],
++            portion: "Entered total", nutrition: value,
+             evidence: [FoodEvidence(kind: .details, detail: "Manually entered values.")])
+         let next = EstimateDraft(estimate: MealEstimate(title: item.name, items: value.containsFood ? [item] : []),
+-            context: String(context.prefix(8000)), lockedItemIDs: value.containsFood ? [item.id] : [])
++            context: context, lockedItemIDs: value.containsFood ? [item.id] : [])
++        // Large manual values remain valid locally, but never send a truncated/partial draft to AI.
+         draft = next.isValid ? next : nil
+-        // Manual label entry is allowed without AI and without the AI model's smaller limits.
+         if original == nil && seed == nil && !usedAI { estimateOverride = false }
+         else if original?.nutrition != value { estimateOverride = nil }
+     }
+-
+-    /// Saved foods are copied into the open form, not saved to the diary or Health.
++    func finishManualEditing() { composingManually = false }
++
++    func canScale(by factor: Double) -> Bool {
++        !busy && manualInputValid && factor.isFinite && factor > 0 && factor <= 20 &&
++            total.containsFood && total.scaled(by: factor).containsFood
++    }
++    /// Scaling is an explicit portion edit. Keep the ingredient identities and proportionally
++    /// scale each one instead of collapsing a reviewed breakdown into a single anonymous total.
++    func scalePortion(by factor: Double) {
++        guard canScale(by: factor), factor != 1 else { return }
++        let old = checkpoint("portion change")
++        let oldEstimated = estimated
++        let scaledTotal = total.scaled(by: factor)
++        if var next = draft {
++            let items = next.estimate.items.compactMap { $0.scaled(by: factor) }
++            if items.count == next.estimate.items.count {
++                next.estimate.items = items
++                next.lockedItemIDs = Set(items.map(\.id))
++                if next.isValid {
++                    pushHistory(old); previousTotal = total; draft = next
++                    total = next.estimate.total; estimateOverride = oldEstimated; replacedNutrition(); return
++                }
++            }
++        }
++        // Values outside the AI schema are still legal manual entries. Keep them undoable.
++        composingManually = false
++        setManualTotal(scaledTotal)
++        estimateOverride = oldEstimated; replacedNutrition()
++    }
++
+     func useTemplate(_ template: FoodTemplate) {
+-        guard !busy else { return }
+-        if let old = draft { pushHistory(old); previousTotal = total }
+-        foodName = template.name
+-        total = template.nutrition; manualInputValid = true; composingManually = false
+-        estimateOverride = template.isEstimate
++        guard !busy, template.nutrition.containsFood, !template.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, template.name.count <= 200 else { return }
++        pushHistory(checkpoint("saved food")); previousTotal = total
++        foodName = template.name; total = template.nutrition; estimateOverride = template.isEstimate
+         let item = EstimatedFood(name: String(template.name.prefix(160)), portion: "Saved serving", nutrition: template.nutrition,
+             evidence: [FoodEvidence(kind: .details, detail: "Saved food values.")])
+         let next = EstimateDraft(estimate: MealEstimate(title: item.name, items: [item]), context: template.name, lockedItemIDs: [item.id])
+         draft = next.isValid ? next : nil
+-        // Preserve time, meal, notes and attached images. Replace food context, not the record ID.
+-        description = template.name; clarification = ""
++        description = template.name; clarification = ""; replacedNutrition()
+     }
+     func undo() {
+         guard !busy, let old = history.popLast() else { return }
+-        previousTotal = draft?.estimate.total
+-        var restored = old
+-        restored.estimate.items = restored.estimate.items.map { item in
+-            var copy = item
+-            copy.evidence = copy.evidence?.map { e in var e = e; e.photoNumber = nil; return e }
+-            return copy
+-        }
+-        draft = restored
+-        total = restored.estimate.total; foodName = restored.estimate.title
+-        manualInputValid = true; composingManually = false; estimateOverride = nil
++        previousTotal = total
++        var restored = old.draft
++        if old.photoRevision != photoRevision { restored?.clearPhotoReferences() }
++        draft = restored; total = old.total; foodName = old.name
++        description = old.description; clarification = old.clarification
++        estimateOverride = old.estimateOverride; usedAI = old.usedAI
++        lastSubmittedPhotoRevision = old.lastSubmittedPhotoRevision
++        replacedNutrition()
+     }
+     func entry() -> FoodEntry? {
+-        guard canSave else { return nil }
++        guard canSave, let clock = EntryClock.updated(original?.clock, from: original?.date, to: date, zoneID: zoneID, confirmed: confirmedZone) else { return nil }
+         var entry = original ?? FoodEntry(id: entryID, name: foodName, date: date, meal: meal, nutrition: total)
+         entry.name = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+-        entry.clock = EntryClock.updated(original?.clock, from: original?.date, to: date, zoneID: zoneID, confirmed: confirmedZone)
+-        entry.date = date; entry.meal = meal; entry.nutrition = total
+-        // Reopening/saving a verified label unchanged must not turn it into a visual estimate.
+-        // Any new AI response or changed nutrition remains estimated until explicitly verified.
++        entry.clock = clock; entry.date = date; entry.meal = meal; entry.nutrition = total
+         entry.isEstimate = estimated; entry.note = note
+         entry.aiDraft = draft?.isValid == true && draft?.estimate.total == total && entry.name.count <= 160 ? draft : nil
+         entry.aiDraft?.estimate.title = entry.name
+         entry.photos = keepPhotos && !photos.isEmpty ? photos : nil
+-        if !keepPhotos || photos != lastSubmittedPhotos {
+-            let items = entry.aiDraft?.estimate.items ?? []
+-            entry.aiDraft?.estimate.items = items.map { item in
+-                var value = item; value.evidence = value.evidence?.map { e in var e = e; e.photoNumber = nil; return e }; return value
+-            }
+-        }
++        if !keepPhotos { entry.aiDraft?.clearPhotoReferences() }
+         return entry.isValid ? entry : nil
+     }
+ }
+--- a/Recomp/Views/InstrumentStyle.swift
++++ b/Recomp/Views/InstrumentStyle.swift
+@@ -181,6 +181,7 @@
+ struct IntakeRings: View {
+     let total: Nutrition
+     let targets: Nutrition
++    var approximate = false
+     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+     var body: some View {
+         GeometryReader { geometry in
+@@ -202,8 +203,8 @@
+                     }.padding(inset)
+                 }
+                 VStack(spacing: 4) {
+-                    Text(total.calories.wholeNumber)
+-                        .font(.system(size: side * 0.115, weight: .medium, design: .monospaced))
++                    Text((approximate ? "≈ " : "") + total.calories.wholeNumber)
++                        .font(.system(size: side * 0.13, weight: .medium, design: .monospaced))
+                         .lineLimit(1).minimumScaleFactor(0.5)
+                     Text("kcal").font(.caption).foregroundStyle(Theme.muted)
+                 }.frame(width: side * 0.45)
+@@ -219,24 +220,68 @@
+     var includesEstimates = false
+     @Environment(\.dynamicTypeSize) private var dynamicType
+     var body: some View {
+-        VStack(alignment: .leading, spacing: 18) {
+-            IntakeRings(total: total, targets: targets)
+-                .frame(maxWidth: 220).frame(maxWidth: .infinity)
+-            VStack(spacing: 8) {
++        VStack(alignment: .leading, spacing: 12) {
++            if dynamicType.isAccessibilitySize {
++                stacked
++            } else {
++                // Prefer the compact instrument panel; let the system fall back rather than
++                // shrinking labels when the screen or text size cannot fit both columns.
++                ViewThatFits(in: .horizontal) {
++                    HStack(spacing: 16) {
++                        IntakeRings(total: total, targets: targets, approximate: includesEstimates)
++                            .frame(width: 128, height: 128)
++                        VStack(alignment: .leading, spacing: 10) {
++                            ForEach(Nutrient.allCases) { nutrient in compactRow(nutrient) }
++                        }.frame(minWidth: 176)
++                    }.fixedSize(horizontal: true, vertical: false)
++                    stacked
++                }.frame(maxWidth: .infinity)
++            }
++            if includesEstimates { Text("Includes estimates").font(.caption).foregroundStyle(Theme.muted) }
++        }.surface().accessibilityIdentifier("home.nutrition")
++    }
++    private var stacked: some View {
++        VStack(spacing: 16) {
++            IntakeRings(total: total, targets: targets, approximate: includesEstimates)
++                .frame(maxWidth: dynamicType.isAccessibilitySize ? 160 : 190).frame(maxWidth: .infinity)
++            VStack(spacing: 10) {
+                 ForEach(Nutrient.allCases) { nutrient in
+                     row(nutrient)
+                     if nutrient != .fat { Divider().overlay(Theme.rule) }
+                 }
+             }
+-            if includesEstimates {
+-                Text("Includes estimates").font(.caption).foregroundStyle(Theme.muted)
+-            }
+-        }.surface().accessibilityIdentifier("home.nutrition")
++        }
++    }
++    private func balance(_ nutrient: Nutrient) -> String {
++        let progress = IntakeRingProgress(value: total[nutrient], target: targets[nutrient])
++        guard let remaining = progress.remaining else { return "No target" }
++        if remaining == 0 { return "At target" }
++        let value = abs(remaining) < 1 ? "<1" : abs(remaining).wholeNumber
++        return "\(value) \(nutrient.unit) \(remaining < 0 ? "over" : "left")"
++    }
++    private func readout(_ nutrient: Nutrient) -> String {
++        let progress = IntakeRingProgress(value: total[nutrient], target: targets[nutrient])
++        let target = progress.hasTarget ? targets[nutrient].wholeNumber : "—"
++        let value = nutrient == .calories ? total[nutrient].wholeNumber : total[nutrient].displayNumber
++        return "\(value) / \(target) \(nutrient.unit)"
++    }
++    private func accessibilityText(_ nutrient: Nutrient) -> String {
++        let target = IntakeRingProgress(value: total[nutrient], target: targets[nutrient]).hasTarget
++            ? ", target \(targets[nutrient].displayNumber) \(nutrient.unit)" : ""
++        return "\(nutrient.title), \(total[nutrient].displayNumber) \(nutrient.unit) logged\(target), \(balance(nutrient))"
++    }
++    private func compactRow(_ nutrient: Nutrient) -> some View {
++        VStack(alignment: .leading, spacing: 3) {
++            HStack(spacing: 5) {
++                Circle().fill(Theme.ringColor(nutrient)).frame(width: 7, height: 7).accessibilityHidden(true)
++                Text(nutrient.title).font(.caption).foregroundStyle(Theme.muted)
++                Spacer(minLength: 8)
++                Text(balance(nutrient)).font(.caption2).foregroundStyle(Theme.muted)
++            }
++            Text(readout(nutrient)).font(.system(.subheadline, design: .monospaced)).foregroundStyle(Theme.ink)
++        }.accessibilityElement(children: .ignore).accessibilityLabel(accessibilityText(nutrient))
+     }
+     private func row(_ nutrient: Nutrient) -> some View {
+-        let progress = IntakeRingProgress(value: total[nutrient], target: targets[nutrient])
+-        let targetText = progress.hasTarget ? targets[nutrient].wholeNumber : "—"
+-        let balance = progress.remaining.map { "\(abs($0).wholeNumber) \(nutrient.unit) \($0 < 0 ? "over" : "left")" } ?? "No target"
+         let layout = dynamicType.isAccessibilitySize
+             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+@@ -246,11 +291,9 @@
+                 Text(nutrient.title).font(.subheadline)
+             }.frame(maxWidth: .infinity, alignment: .leading)
+             VStack(alignment: dynamicType.isAccessibilitySize ? .leading : .trailing, spacing: 3) {
+-                Text("\(total[nutrient].wholeNumber) / \(targetText) \(nutrient.unit)")
+-                    .font(.system(.subheadline, design: .monospaced)).foregroundStyle(Theme.ink)
+-                Text(balance).font(.caption).foregroundStyle(Theme.muted)
+-            }
+-        }.accessibilityElement(children: .ignore)
+-            .accessibilityLabel("\(nutrient.title), \(total[nutrient].wholeNumber) \(nutrient.unit) logged, target \(targetText) \(nutrient.unit), \(balance)")
+-    }
+-}
++                Text(readout(nutrient)).font(.system(.subheadline, design: .monospaced)).foregroundStyle(Theme.ink)
++                Text(balance(nutrient)).font(.caption).foregroundStyle(Theme.muted)
++            }
++        }.accessibilityElement(children: .ignore).accessibilityLabel(accessibilityText(nutrient))
++    }
++}
+--- a/Recomp/Views/RootView.swift
++++ b/Recomp/Views/RootView.swift
+@@ -72,7 +72,7 @@
+     var body: some View {
+         NavigationStack {
+             ScrollView {
+-                VStack(alignment: .leading, spacing: 24) {
++                VStack(alignment: .leading, spacing: 18) {
+                     if let error = diary.loadFailure {
+                         Notice(text: "Diary could not be loaded. Saving is paused to protect it. \(error)", symbol: "exclamationmark.triangle").surface()
+                     }
+@@ -85,10 +85,6 @@
+                         Notice(text: "Multiple timezones on this date. Review Travel & food coverage; targets are for a normal day.", symbol: "airplane")
+                     }
+                     entryActions
+-                    Button { showCheck = true } label: {
+-                        Label("Check food", systemImage: "magnifyingglass")
+-                            .font(.subheadline).frame(minHeight: 44)
+-                    }.disabled(diary.loadFailure != nil).accessibilityIdentifier("food.check")
+                     foodLog
+                     DayCompletionCard()
+                     if diary.state.healthEnabled { healthNote }
+@@ -122,19 +118,22 @@
+         }.foregroundStyle(Theme.ink).frame(maxWidth: 320)
+     }
+     private var entryActions: some View {
+-        Button { newEntry() } label: {
+-            Label("Log food", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 28)
+-        }.instrumentPrimary().accessibilityIdentifier("food.log").disabled(diary.loadFailure != nil)
++        let layout = dynamicType.isAccessibilitySize
++            ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
++        return layout {
++            Button { newEntry() } label: {
++                Label("Log food", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 28)
++            }.instrumentPrimary().accessibilityIdentifier("food.log")
++            Button { showCheck = true } label: {
++                Label("Check food", systemImage: "magnifyingglass").frame(minHeight: 28)
++            }.buttonStyle(.bordered).controlSize(.large).accessibilityIdentifier("food.check")
++        }.disabled(diary.loadFailure != nil)
+     }
+     private var foodLog: some View {
+         VStack(alignment: .leading, spacing: 18) {
+-            SectionHeading(title: "Food", detail: "\(diary.dayEntries.count) entries")
++            SectionHeading(title: "Food", detail: diary.dayEntries.isEmpty ? "" : "\(diary.dayEntries.count) \(diary.dayEntries.count == 1 ? "entry" : "entries")")
+             if diary.dayEntries.isEmpty {
+-                VStack(alignment: .leading, spacing: 8) {
+-                    Text("Nothing logged yet.").font(.title3)
+-                    Text("Tap Log food to add a meal.")
+-                        .font(.subheadline).foregroundStyle(Theme.muted)
+-                }.padding(.vertical, 12)
++                Text("No food logged.").font(.subheadline).foregroundStyle(Theme.muted).padding(.vertical, 12)
+             } else {
+                 ForEach(MealKind.allCases) { kind in
+                     let entries = diary.dayEntries.filter { $0.meal == kind }
+@@ -184,8 +183,8 @@
+         }.frame(maxWidth: .infinity, alignment: .leading)
+     }
+     private func entryStatus(_ entry: FoodEntry) -> String {
+-        if !diary.state.healthEnabled { return "Saved on device" }
+-        return entry.exportCount == 4 ? "Exported to Health" : "\(entry.exportCount)/4 values exported"
++        if !diary.state.healthEnabled || entry.exportCount == 4 { return "" }
++        return "Health pending · \(entry.exportCount)/4 values"
+     }
+     private func newEntry() {
+         let date = diary.defaultEntryDate()
+@@ -210,8 +209,7 @@
+                     Text(EntryClock.label(date: entry.date, clock: clock))
+                         .font(.caption).foregroundStyle(Theme.muted)
+                 }
+-                Text((entry.isEstimate ? "Estimate · " : "") + status)
+-                    .font(.caption).foregroundStyle(Theme.muted)
++                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(Theme.muted) }
+             }.frame(maxWidth: .infinity, alignment: .leading)
+             HStack(alignment: .firstTextBaseline, spacing: 6) {
+                 Text("\(entry.isEstimate ? "≈ " : "")\(entry.nutrition.calories.wholeNumber)")
+--- a/Recomp/Views/EstimatedFoodEditor.swift
++++ b/Recomp/Views/EstimatedFoodEditor.swift
+@@ -5,70 +5,89 @@
+     @Environment(\.dismiss) private var dismiss
+     let original: EstimatedFood
+     let onSave: (EstimatedFood, Bool) -> Void
++    let onDelete: (() -> Void)?
++    private let initialLock: Bool
+     @State private var name: String
+     @State private var portion: String
+     @State private var inputs: NutritionInputs
+-    @State private var locked = true
++    @State private var locked: Bool
++    @State private var lockWasChosen = false
+     @State private var factor = "1"
+-    init(food: EstimatedFood, onSave: @escaping (EstimatedFood, Bool) -> Void) {
+-        original = food; self.onSave = onSave
++    @State private var confirmDiscard = false
++    @State private var confirmDelete = false
++    init(food: EstimatedFood, locked: Bool = true, onDelete: (() -> Void)? = nil,
++         onSave: @escaping (EstimatedFood, Bool) -> Void) {
++        original = food; self.onSave = onSave; self.onDelete = onDelete; initialLock = locked
+         _name = State(initialValue: food.name); _portion = State(initialValue: food.portion)
+-        _inputs = State(initialValue: NutritionInputs(food.nutrition))
++        _inputs = State(initialValue: NutritionInputs(food.nutrition)); _locked = State(initialValue: locked)
+     }
++    private var changedValues: Bool { name != original.name || portion != original.portion || inputs.parsed != original.nutrition }
++    private var hasChanges: Bool { changedValues || locked != initialLock }
+     private var value: EstimatedFood? {
+         guard let parsed = inputs.parsed else { return nil }
+         var food = original
+         food.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+         food.portion = portion.trimmingCharacters(in: .whitespacesAndNewlines)
+         food.nutrition = parsed
+-        if name != original.name || portion != original.portion || parsed != original.nutrition {
+-            food.confidence = .low
+-            food.evidence = nil
+-            food.assumptions = ["Manually edited."]
++        if changedValues {
++            food.confidence = .low; food.evidence = nil; food.assumptions = ["Manually edited."]
+         }
+         return food.isValid ? food : nil
+     }
+     var body: some View {
+         NavigationStack {
+             Form {
+-                Section("Food and amount eaten") {
++                Section {
+                     TextField("Food", text: $name)
+-                    TextField("e.g. 150 g cooked rice", text: $portion, axis: .vertical)
++                    TextField("Amount eaten, e.g. 150 g cooked rice", text: $portion, axis: .vertical)
+                 }
+-                Section {
+-                    NutritionFields(inputs: $inputs)
+-                } header: { Text("Totals for this portion") }
+-                  footer: { Text("Changing the description does not recalculate nutrition. Scale the amount or edit the numbers.") }
+-                Section("Scale the amount") {
++                Section("Nutrition for this amount") { NutritionFields(inputs: $inputs) }
++                Section("Portion") {
+                     HStack {
+-                        TextField("Multiplier", text: $factor).keyboardType(.decimalPad)
+-                            .accessibilityLabel("Portion multiplier")
++                        TextField("Multiplier", text: $factor).keyboardType(.decimalPad).accessibilityLabel("Portion multiplier")
+                         Button("Apply") {
+-                            guard let n = InputNumber.parse(factor), let food = value, let scaled = food.scaled(by: n) else { return }
+-                            inputs = NutritionInputs(scaled.nutrition); portion = scaled.portion; factor = "1"
+-                        }.disabled(value == nil || InputNumber.parse(factor).map { $0 > 0 && $0 <= 20 } != true)
++                            if let n = InputNumber.parse(factor) { scale(n); factor = "1" }
++                        }.disabled(InputNumber.parse(factor).flatMap { value?.scaled(by: $0) } == nil)
+                     }
+                     HStack {
+-                        Button("Half") { scale(0.5) }.buttonStyle(.bordered)
+-                        Button("Double") { scale(2) }.buttonStyle(.bordered)
+-                    }.disabled(value == nil)
++                        Button("Half") { scale(0.5) }.buttonStyle(.bordered).disabled(value?.scaled(by: 0.5) == nil)
++                        Button("Double") { scale(2) }.buttonStyle(.bordered).disabled(value?.scaled(by: 2) == nil)
++                    }
++                } footer: { Text("Changing the description alone won’t change nutrition.") }
++                Section {
++                    Toggle("Protect from AI changes", isOn: Binding(get: { locked }, set: { locked = $0; lockWasChosen = true }))
++                } footer: { Text("Manual edits are protected unless you unlock them.") }
++                if let evidence = original.evidence, !evidence.isEmpty, !changedValues {
++                    Section {
++                        DisclosureGroup("Sources") {
++                            ForEach(Array(evidence.enumerated()), id: \.offset) { _, source in
++                                Text("\(source.photoNumber.map { "Photo \($0): " } ?? "")\(source.detail)").font(.footnote)
++                            }
++                        }
++                    }
+                 }
+-                Section {
+-                    Toggle("Protect from AI changes", isOn: $locked)
+-                } footer: { Text("Locked foods stay unchanged during AI updates.") }
++                if onDelete != nil { Section { Button("Remove food", role: .destructive) { confirmDelete = true } } }
+             }
+             .instrumentForm()
+-            .navigationTitle("Edit food").navigationBarTitleDisplayMode(.inline)
++            .navigationTitle(original.name.isEmpty ? "Add food" : "Edit food").navigationBarTitleDisplayMode(.inline)
++            .onChange(of: changedValues) { _, changed in if changed && !lockWasChosen { locked = true } }
+             .toolbar {
+-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
++                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { if hasChanges { confirmDiscard = true } else { dismiss() } } }
+                 ToolbarItem(placement: .confirmationAction) {
+                     Button("Apply") { if let value { onSave(value, locked); dismiss() } }.disabled(value == nil)
+                 }
+             }
++            .interactiveDismissDisabled(hasChanges)
++            .confirmationDialog("Discard changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
++                Button("Discard", role: .destructive) { dismiss() }
++            }
++            .confirmationDialog("Remove this food?", isPresented: $confirmDelete, titleVisibility: .visible) {
++                Button("Remove", role: .destructive) { onDelete?(); dismiss() }
++            } message: { Text("Removes it from this draft. You can Undo before saving.") }
+         }
+     }
+-    private func scale(_ n: Double) {
+-        guard let food = value, let scaled = food.scaled(by: n) else { return }
++    private func scale(_ factor: Double) {
++        guard let food = value, let scaled = food.scaled(by: factor) else { return }
+         inputs = NutritionInputs(scaled.nutrition); portion = scaled.portion
+     }
+ }
+--- a/Recomp/Views/TravelViews.swift
++++ b/Recomp/Views/TravelViews.swift
+@@ -11,17 +11,17 @@
+         DatePicker("When", selection: $date, in: ...Date(), displayedComponents: [.date, .hourAndMinute])
+             .environment(\.timeZone, zone).environment(\.calendar, EntryClock.calendar(in: zone))
+         Button { chooseZone = true } label: { LabeledContent("Entry timezone", value: zoneID) }
+-        Text("The diary keeps this local date when you travel. Changing the timezone keeps the same instant; change the date/time as well only to correct when it happened.")
+-            .font(.caption).foregroundStyle(.secondary)
+         if legacy && !confirmedZone {
+             Text("This older entry had no recorded timezone. Its display was frozen during upgrade, not recovered from GPS. Check the timezone before confirming it.")
+                 .font(.caption).foregroundStyle(.secondary)
+             Toggle("I checked this entry's timezone", isOn: $confirmedZone)
+         }
+-        DisclosureGroup("Exact time · UTC") {
+-            DatePicker("UTC", selection: $date, in: ...Date(), displayedComponents: [.date, .hourAndMinute])
++        DisclosureGroup("Time details") {
++            Text("This date stays fixed when you travel. Changing timezone keeps the same instant.")
++                .font(.caption).foregroundStyle(.secondary)
++            DatePicker("Exact time · UTC", selection: $date, in: ...Date(), displayedComponents: [.date, .hourAndMinute])
+                 .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!).environment(\.calendar, EntryClock.utc)
+-            Text("Useful when a clock hour repeats at the end of daylight saving. This changes the same event, not a second record.")
++            Text("Use UTC to distinguish repeated hours when daylight saving ends.")
+                 .font(.caption).foregroundStyle(.secondary)
+         }
+         .sheet(isPresented: $chooseZone) {
+--- a/Recomp/Views/Components.swift
++++ b/Recomp/Views/Components.swift
+@@ -40,6 +40,7 @@
+ 
+ struct NutritionFields: View {
+     @Binding var inputs: NutritionInputs
++    var onEditingEnded: () -> Void = {}
+     @FocusState private var focused: Nutrient?
+     var body: some View {
+         ForEach(Nutrient.allCases) { nutrient in
+@@ -55,6 +56,9 @@
+                 Text(nutrient.unit).foregroundStyle(.secondary).frame(width: 32, alignment: .trailing)
+             }
+         }
++        .onChange(of: focused) { old, new in
++            if old != nil && old != new { onEditingEnded() }
++        }
+         .toolbar {
+             ToolbarItemGroup(placement: .keyboard) {
+                 Spacer()
+--- a/Recomp/Views/MealEstimatorView.swift
++++ b/Recomp/Views/MealEstimatorView.swift
+@@ -2,8 +2,19 @@
+ import PhotosUI
+ import AVFoundation
+ 
+-/// One native form for typed values, photos, saved foods and AI refinements.
+-/// Check uses the same form but has no save action until explicitly switched to Log.
++private enum FoodSheet: Identifiable {
++    case settings, usuals, ingredient(EstimatedFood), photo(MealPhoto)
++    var id: String {
++        switch self {
++        case .settings: return "settings"
++        case .usuals: return "usuals"
++        case .ingredient(let food): return "food:" + food.id
++        case .photo(let photo): return "photo:" + photo.id.uuidString
++        }
++    }
++}
++
++/// One draft, one Save. Photos, manual values and AI are inputs, not different logging modes.
+ @MainActor
+ struct MealEstimatorView: View {
+     @EnvironmentObject private var diary: DiaryStore
+@@ -12,12 +23,10 @@
+     @State private var inputs: NutritionInputs
+     @State private var selectedPhotos: [PhotosPickerItem] = []
+     @State private var importTask: Task<Void, Never>?
++    @State private var photoImport = PhotoImportSession()
+     @State private var mode: MealEntryMode
+-    @State private var importing = false
+     @State private var camera = false
+-    @State private var settings = false
+-    @State private var usuals = false
+-    @State private var editingFood: EstimatedFood?
++    @State private var sheet: FoodSheet?
+     @State private var confirmUpload = false
+     @State private var confirmDiscard = false
+     @State private var confirmDelete = false
+@@ -34,6 +43,7 @@
+         _inputs = State(initialValue: NutritionInputs((entry ?? seed)?.nutrition ?? .zero))
+         self.onSaved = onSaved
+     }
++    private var importing: Bool { photoImport.isActive }
+     private var nutritionBinding: Binding<NutritionInputs> {
+         Binding(get: { inputs }, set: { value in inputs = value; model.setManualTotal(value.parsed) })
+     }
+@@ -43,59 +53,12 @@
+     var body: some View {
+         NavigationStack {
+             Form {
+-                Section {
+-                    TextField("Food or meal", text: Binding(get: { model.foodName }, set: { model.rename($0) }))
+-                        .accessibilityIdentifier("food.name").disabled(model.busy)
+-                    Button { usuals = true } label: { Label("Your usuals", systemImage: "bookmark") }
+-                        .accessibilityIdentifier("food.usuals").disabled(model.busy || importing)
+-                }
++                foodSection
+                 photoSection
+-                Section {
+-                    if model.draft == nil {
+-                        TextField("Portions, brands, cooking details…", text: $model.description, axis: .vertical)
+-                            .lineLimit(1...4).disabled(model.busy).accessibilityIdentifier("food.description")
+-                    } else {
+-                        TextField("Add details or corrections…", text: $model.clarification, axis: .vertical)
+-                            .lineLimit(1...4).disabled(model.busy).accessibilityIdentifier("food.description")
+-                    }
+-                    if model.busy {
+-                        HStack { ProgressView("Estimating…"); Spacer(); Button("Cancel") { model.cancelRequest() } }
+-                    } else {
+-                        Button { prepareUpload() } label: {
+-                            Label(model.draft == nil ? "Estimate nutrition" : "Update estimate", systemImage: "viewfinder")
+-                        }.disabled(!model.canRequest || importing || inputs.parsed != model.total).accessibilityIdentifier("food.estimate")
+-                    }
+-                    DisclosureGroup("AI settings") {
+-                        Button("Photo & text estimates") { settings = true }.disabled(model.busy)
+-                        Text("Photos and meal details are sent only after you approve. API charges apply.")
+-                            .font(.caption).foregroundStyle(.secondary)
+-                    }
+-                } footer: {
+-                    Text(model.draft?.lockedItemIDs.isEmpty == false
+-                         ? "Locked values stay unchanged. Unlock them under Foods."
+-                         : "Optional. You can enter the numbers below instead.")
+-                }
++                estimateSection
+                 nutritionSection
+-                if let draft = model.draft, !draft.estimate.items.isEmpty {
+-                    Section {
+-                        DisclosureGroup("Foods · \(draft.estimate.items.count)") { foodBreakdown(draft) }
+-                        if !draft.estimate.assumptions.isEmpty || !draft.estimate.questions.isEmpty {
+-                            DisclosureGroup("Assumptions & questions") {
+-                                ForEach(Array(draft.estimate.assumptions.enumerated()), id: \.offset) { _, text in Text(text).font(.footnote) }
+-                                ForEach(Array(draft.estimate.questions.enumerated()), id: \.offset) { _, text in Text(text).font(.footnote) }
+-                            }
+-                        }
+-                        if !model.history.isEmpty { Button("Undo") { model.undo() }.disabled(model.busy) }
+-                    }
+-                }
+-                if mode == .check {
+-                    checkSection
+-                } else {
+-                    loggingSection
+-                    if model.original != nil {
+-                        Section { Button("Delete food", role: .destructive) { confirmDelete = true }.disabled(model.busy) }
+-                    }
+-                }
++                breakdownSection
++                if mode == .check { checkSection } else { loggingSection }
+             }
+             .onAppear {
+                 if !initializedZone {
+@@ -103,16 +66,22 @@
+                     if !model.isExistingMeal { model.zoneID = diary.defaultEntryZone }
+                 }
+             }
+-            .onChange(of: model.total) { _, value in
+-                if inputs.parsed != value { inputs = NutritionInputs(value) }
+-            }
++            .onChange(of: model.inputRevision) { _, _ in inputs = NutritionInputs(model.total) }
+             .instrumentForm()
+             .navigationTitle(mode == .check ? "Check food" : model.original == nil ? "Log food" : "Edit food")
+             .navigationBarTitleDisplayMode(.inline)
+             .toolbar {
+                 ToolbarItem(placement: .cancellationAction) {
+                     Button(mode == .check ? "Close" : "Cancel") {
+-                        if model.hasChanges { confirmDiscard = true } else { dismiss() }
++                        if model.hasChanges || importing { confirmDiscard = true } else { dismiss() }
++                    }
++                }
++                ToolbarItem(placement: .topBarTrailing) {
++                    if !model.history.isEmpty {
++                        Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
++                            .accessibilityLabel(model.undoTitle).accessibilityIdentifier("food.undo")
++                            .help(model.undoTitle).disabled(model.busy || importing)
++                            .keyboardShortcut("z", modifiers: .command)
+                     }
+                 }
+                 ToolbarItem(placement: .confirmationAction) {
+@@ -121,16 +90,22 @@
+                     }
+                 }
+             }
+-            .interactiveDismissDisabled(model.hasChanges || model.busy)
+-            .onDisappear { model.cancelRequest(); importTask?.cancel(); uploadConfiguration = nil }
+-            .sheet(isPresented: $settings) { EstimatorSettingsView() }
+-            .sheet(isPresented: $usuals) {
+-                SavedFoodPicker(replacing: model.total.containsFood) { template in
+-                    model.useTemplate(template); inputs = NutritionInputs(model.total)
+-                }
+-            }
+-            .sheet(item: $editingFood) { food in
+-                EstimatedFoodEditor(food: food) { value, locked in model.edit(value, locked: locked) }
++            .interactiveDismissDisabled(model.hasChanges || model.busy || importing)
++            .onDisappear { model.cancelRequest(); cancelPhotoImport(); uploadConfiguration = nil }
++            .sheet(item: $sheet) { destination in
++                switch destination {
++                case .settings: EstimatorSettingsView()
++                case .usuals:
++                    SavedFoodPicker(replacing: model.total.containsFood) { model.useTemplate($0) }
++                case .ingredient(let food):
++                    EstimatedFoodEditor(food: food, locked: model.editorLock(for: food),
++                        onDelete: ingredientRemoval(for: food)
++                    ) { value, locked in model.edit(value, locked: locked) }
++                case .photo(let photo):
++                    MealPhotoDetails(photo: photo, onDelete: { model.photos.removeAll { $0.id == photo.id } }) { value in
++                        if let index = model.photos.firstIndex(where: { $0.id == value.id }) { model.photos[index] = value }
++                    }
++                }
+             }
+             .fullScreenCover(isPresented: $camera) {
+                 MealCameraPicker(onPhoto: { image in
+@@ -139,24 +114,7 @@
+                     catch { model.error = error.localizedDescription }
+                 }, onCancel: { camera = false }).ignoresSafeArea()
+             }
+-            .onChange(of: selectedPhotos) { _, items in
+-                guard !items.isEmpty else { return }
+-                importing = true
+-                importTask?.cancel()
+-                importTask = Task {
+-                    defer { importing = false; selectedPhotos = [] }
+-                    do {
+-                        for item in items {
+-                            try Task.checkCancellation()
+-                            guard model.photos.count < MealPhoto.maximumCount else { break }
+-                            guard let data = try await item.loadTransferable(type: Data.self) else { throw EstimateError.imageTooLarge }
+-                            try Task.checkCancellation()
+-                            model.photos.append(try MealPhotoPreparation.from(data: data))
+-                        }
+-                    } catch is CancellationError { }
+-                    catch { model.error = error.localizedDescription }
+-                }
+-            }
++            .onChange(of: selectedPhotos) { _, items in if !items.isEmpty { importPhotos(items) } }
+             .confirmationDialog("Send to AI?", isPresented: $confirmUpload, titleVisibility: .visible) {
+                 Button("Estimate") {
+                     if let configuration = uploadConfiguration { model.begin(configuration: configuration) }
+@@ -164,12 +122,12 @@
+                 }
+                 Button("Cancel", role: .cancel) { uploadConfiguration = nil }
+             } message: {
+-                Text("Send \(model.photos.count) photo(s), your food details and the current breakdown to \(uploadConfiguration?.destinationDescription ?? "your chosen AI connection"). No Apple Health records or other diary entries are sent. Provider retention policies apply.")
++                Text("Send \(model.photos.count) photos and this meal’s details to \(uploadConfiguration?.destinationDescription ?? "your AI connection"). No Health records or other meals are sent. API charges and provider retention policies apply.")
+             }
+             .confirmationDialog("Discard changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+-                Button("Discard", role: .destructive) { model.cancelRequest(); dismiss() }
++                Button("Discard", role: .destructive) { model.cancelRequest(); cancelPhotoImport(); dismiss() }
+             } message: { Text("Unsaved food and photos will be discarded.") }
+-            .alert("Could not estimate", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
++            .alert("Couldn’t complete", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+                 Button("OK", role: .cancel) { model.error = nil }
+             } message: { Text(model.error ?? "") }
+             .confirmationDialog("Delete this food?", isPresented: $confirmDelete, titleVisibility: .visible) {
+@@ -186,93 +144,118 @@
+             } message: { Text("Allow camera access in Settings, or choose a photo.") }
+         }
+     }
++    private var foodSection: some View {
++        Section {
++            TextField("Food or meal", text: Binding(get: { model.foodName }, set: { model.rename($0) }))
++                .accessibilityIdentifier("food.name").disabled(model.busy)
++            Button { sheet = .usuals } label: { Label("Your usuals", systemImage: "bookmark") }
++                .accessibilityIdentifier("food.usuals").disabled(model.busy || importing)
++        }
++    }
+     private var photoSection: some View {
+         Section {
+             if !model.photos.isEmpty {
+                 ScrollView(.horizontal) {
+-                    HStack {
+-                        ForEach(model.photos) { photo in
+-                            VStack {
+-                                if let image = UIImage(data: photo.jpeg) {
+-                                    Image(uiImage: image).resizable().scaledToFill().frame(width: 120, height: 100).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
+-                                        .accessibilityLabel("Selected meal photo")
+-                                }
+-                                Picker("Photo role", selection: Binding(get: { model.photos.first(where: { $0.id == photo.id })?.role ?? .automatic }, set: { role in
+-                                    if let i = model.photos.firstIndex(where: { $0.id == photo.id }) { model.photos[i].role = role }
+-                                })) { ForEach(MealPhotoRole.allCases) { Text($0.title).tag($0) } }.labelsHidden().disabled(model.busy)
+-                                TextField("Note", text: Binding(get: { model.photos.first(where: { $0.id == photo.id })?.caption ?? "" }, set: { text in
+-                                    if let i = model.photos.firstIndex(where: { $0.id == photo.id }) { model.photos[i].caption = String(text.prefix(240)) }
+-                                }), axis: .vertical).font(.caption).lineLimit(1...3).frame(width: 140).disabled(model.busy)
+-                                Button("Remove", role: .destructive) { model.photos.removeAll { $0.id == photo.id } }
+-                                    .font(.caption).disabled(model.busy)
+-                            }
++                    HStack(alignment: .top, spacing: 12) {
++                        ForEach(Array(model.photos.enumerated()), id: \.element.id) { index, photo in
++                            MealPhotoTile(photo: photo, number: index + 1, onOpen: { sheet = .photo(photo) },
++                                          onRemove: { model.photos.removeAll { $0.id == photo.id } })
+                         }
+-                    }
+-                }
+-            }
+-            HStack {
+-                Button { requestCamera() } label: { Label("Camera", systemImage: "camera") }
+-                    .buttonStyle(.bordered).accessibilityIdentifier("food.camera")
+-                PhotosPicker(selection: $selectedPhotos, maxSelectionCount: max(1, MealPhoto.maximumCount - model.photos.count), selectionBehavior: .ordered, matching: .images, photoLibrary: .shared()) {
+-                    Label("Photo library", systemImage: "photo.on.rectangle")
+-                }.buttonStyle(.bordered).accessibilityIdentifier("food.photos")
++                    }.padding(.vertical, 4)
++                }.disabled(model.busy || importing)
++            }
++            ViewThatFits(in: .horizontal) {
++                HStack(spacing: 12) { photoButtons }
++                VStack(alignment: .leading, spacing: 8) { photoButtons }
+             }.disabled(model.busy || importing || model.photos.count >= MealPhoto.maximumCount)
+-            if importing { ProgressView("Preparing photo…") }
+-            Text("Up to 6 photos: food, labels or leftovers.")
+-                .font(.caption).foregroundStyle(.secondary)
+-        } header: { Text("Photos") }
++            if importing { ProgressView("Preparing photos…") }
++        } header: { Text(model.photos.isEmpty ? "Photos" : "Photos · \(model.photos.count) of 6") }
++    }
++    @ViewBuilder private var photoButtons: some View {
++        Button { requestCamera() } label: { Label("Camera", systemImage: "camera") }
++            .buttonStyle(.bordered).accessibilityIdentifier("food.camera")
++        PhotosPicker(selection: $selectedPhotos, maxSelectionCount: max(1, MealPhoto.maximumCount - model.photos.count), selectionBehavior: .ordered, matching: .images, photoLibrary: .shared()) {
++            Label("Photo library", systemImage: "photo.on.rectangle")
++        }.buttonStyle(.bordered).accessibilityIdentifier("food.photos")
++    }
++    private var estimateSection: some View {
++        Section {
++            if model.draft == nil {
++                TextField("Portions, brands, cooking details…", text: $model.description, axis: .vertical)
++                    .lineLimit(1...4).disabled(model.busy).accessibilityIdentifier("food.description")
++            } else {
++                TextField("Add details or corrections…", text: $model.clarification, axis: .vertical)
++                    .lineLimit(1...4).disabled(model.busy).accessibilityIdentifier("food.description")
++            }
++            if model.busy {
++                HStack { ProgressView("Estimating…"); Spacer(); Button("Cancel") { model.cancelRequest() } }
++            } else {
++                HStack {
++                    Button { prepareUpload() } label: {
++                        Label(model.draft == nil ? "Estimate nutrition" : "Update estimate", systemImage: "viewfinder")
++                    }.disabled(!model.canRequest || importing || inputs.parsed != model.total).accessibilityIdentifier("food.estimate")
++                    Spacer()
++                    Button { sheet = .settings } label: { Image(systemName: "gearshape").frame(minWidth: 44, minHeight: 44) }
++                        .accessibilityLabel("AI settings").buttonStyle(.borderless)
++                }
++            }
++        } footer: {
++            if model.draft?.lockedItemIDs.isEmpty == false { Text("Locked values won’t change. Unlock them in Breakdown.") }
++            else { Text("Optional. Enter values below or approve an AI estimate.") }
++        }
+     }
+     private var nutritionSection: some View {
+         Section {
+-            NutritionFields(inputs: nutritionBinding).disabled(model.busy || importing)
+-            HStack {
+-                Button("Half") { scale(0.5) }.buttonStyle(.bordered)
+-                Button("Double") { scale(2) }.buttonStyle(.bordered)
+-                Spacer()
+-            }.disabled(model.busy || inputs.parsed?.containsFood != true)
+-            Toggle("Estimated", isOn: Binding(get: { model.estimated }, set: { model.setEstimated($0) })).disabled(model.busy)
++            NutritionFields(inputs: nutritionBinding, onEditingEnded: { model.finishManualEditing() }).disabled(model.busy || importing)
++            if model.total.containsFood {
++                HStack {
++                    Button("Half") { model.scalePortion(by: 0.5) }.buttonStyle(.bordered).disabled(!model.canScale(by: 0.5))
++                        .accessibilityIdentifier("food.half")
++                    Button("Double") { model.scalePortion(by: 2) }.buttonStyle(.bordered).disabled(!model.canScale(by: 2))
++                        .accessibilityIdentifier("food.double")
++                }.disabled(importing)
++            }
++            Toggle("Estimated values", isOn: Binding(get: { model.estimated }, set: { model.setEstimated($0) }))
++                .disabled(model.busy || importing).accessibilityIdentifier("food.estimated")
+             if !model.manualInputValid {
+-                Text("Check the numbers. Use a decimal point or comma, without thousands separators.")
+-                    .font(.caption).foregroundStyle(.secondary)
+-            }
+-        } header: { Text("Nutrition") }
+-          footer: { Text("Totals for the amount eaten. Editing totals replaces the ingredient breakdown.") }
++                Text("Use a decimal point or comma, without thousands separators.").font(.caption).foregroundStyle(.secondary)
++            }
++        } header: { Text("Nutrition · amount eaten") }
++    }
++    @ViewBuilder private var breakdownSection: some View {
++        if let draft = model.draft {
++            Section {
++                DisclosureGroup("Breakdown · \(draft.estimate.items.count)") { foodBreakdown(draft) }
++                    .accessibilityIdentifier("food.breakdown")
++                if !draft.estimate.assumptions.isEmpty || !draft.estimate.questions.isEmpty {
++                    DisclosureGroup("Assumptions & questions") {
++                        ForEach(Array(draft.estimate.assumptions.enumerated()), id: \.offset) { _, text in Text(text).font(.footnote) }
++                        ForEach(Array(draft.estimate.questions.enumerated()), id: \.offset) { _, text in Text(text).font(.footnote) }
++                    }
++                }
++            }
++        }
+     }
+     @ViewBuilder private func foodBreakdown(_ draft: EstimateDraft) -> some View {
+         ForEach(draft.estimate.items) { food in
+-            VStack(alignment: .leading, spacing: 8) {
+-                HStack {
+-                    Button { editingFood = food } label: {
+-                        VStack(alignment: .leading, spacing: 4) {
+-                            Text(food.name).foregroundStyle(Theme.ink)
+-                            Text(food.portion).font(.caption).foregroundStyle(Theme.muted)
+-                        }
+-                    }.buttonStyle(.plain)
+-                    Spacer()
+-                    Button { model.toggleLock(food.id) } label: {
+-                        Image(systemName: draft.lockedItemIDs.contains(food.id) ? "lock.fill" : "lock.open")
+-                            .frame(minWidth: 44, minHeight: 44)
+-                    }.buttonStyle(.borderless)
+-                        .accessibilityLabel(draft.lockedItemIDs.contains(food.id) ? "Unlock \(food.name) for AI edits" : "Protect \(food.name) from AI edits")
+-                }
+-                Text("\(food.nutrition.calories.wholeNumber) kcal · P \(food.nutrition.protein.displayNumber) · C \(food.nutrition.carbs.displayNumber) · F \(food.nutrition.fat.displayNumber) g")
+-                    .font(.caption).monospacedDigit()
+-                if let evidence = food.evidence, !evidence.isEmpty {
+-                    DisclosureGroup("Source") {
+-                        ForEach(Array(evidence.enumerated()), id: \.offset) { _, source in
+-                            Text("\(source.photoNumber.map { "Photo \($0): " } ?? "")\(source.detail)").font(.caption)
+-                        }
+-                    }.font(.caption)
+-                }
+-                HStack {
+-                    Button("Edit") { editingFood = food }
+-                    Spacer()
+-                    Button("Remove", role: .destructive) { model.remove(food.id) }
+-                }.buttonStyle(.borderless).font(.subheadline)
+-            }.padding(.vertical, 6).disabled(model.busy)
+-        }
+-        Button("Add food") { editingFood = model.addBlankFood() }.disabled(model.busy || draft.estimate.items.count >= 15)
+-        Text("Locked foods stay unchanged during AI updates.").font(.caption).foregroundStyle(.secondary)
++            HStack(alignment: .top, spacing: 12) {
++                Button { sheet = .ingredient(food) } label: {
++                    VStack(alignment: .leading, spacing: 5) {
++                        Text(food.name).foregroundStyle(Theme.ink)
++                        Text(food.portion).font(.caption).foregroundStyle(Theme.muted)
++                        Text("\(food.nutrition.calories.wholeNumber) kcal · \(food.nutrition.protein.displayNumber) g protein")
++                            .font(.system(.caption, design: .monospaced)).foregroundStyle(Theme.muted)
++                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
++                }.buttonStyle(.plain).accessibilityHint("Edit values, see sources or remove")
++                Button { model.toggleLock(food.id) } label: {
++                    Image(systemName: draft.lockedItemIDs.contains(food.id) ? "lock.fill" : "lock.open")
++                        .frame(minWidth: 44, minHeight: 44)
++                }.buttonStyle(.borderless)
++                    .accessibilityLabel(draft.lockedItemIDs.contains(food.id) ? "Unlock \(food.name) for AI edits" : "Protect \(food.name) from AI edits")
++            }.padding(.vertical, 6).disabled(model.busy || importing)
++        }
++        Button("Add food") { sheet = .ingredient(model.addBlankFood()) }
++            .disabled(model.busy || importing || draft.estimate.items.count >= 15)
+     }
+     private var checkSection: some View {
+         let projection = FoodCheckProjection(current: diary.total, candidate: model.total, targets: diary.state.targets)
+@@ -285,25 +268,30 @@
+                     .accessibilityIdentifier("food.useCheck")
+             }
+         } header: { Text("With this food") }
+-          footer: { Text("Not logged. Close to discard, or choose Log this food to review and save.") }
++          footer: { Text("Not logged. Close to discard, or Log this food to save.") }
+     }
+     private var loggingSection: some View {
+         Section {
+             Picker("Meal", selection: $model.meal) { ForEach(MealKind.allCases) { Text($0.rawValue).tag($0) } }
+             EntryTimeFields(date: $model.date, zoneID: $model.zoneID, confirmedZone: $model.confirmedZone, legacy: model.timezoneNeedsReview)
+-            TextField("Notes", text: $model.note, axis: .vertical).lineLimit(1...4)
+-            Toggle("Save as a usual", isOn: $model.makeTemplate)
+-            if !model.photos.isEmpty { Toggle("Keep photos attached", isOn: $model.keepPhotos) }
++            DisclosureGroup("More options") {
++                TextField("Notes", text: $model.note, axis: .vertical).lineLimit(1...4)
++                Toggle("Save as a usual", isOn: $model.makeTemplate)
++                if !model.photos.isEmpty { Toggle("Keep photos attached", isOn: $model.keepPhotos) }
++                if model.original != nil { Button("Delete food", role: .destructive) { confirmDelete = true } }
++            }
++            if model.total.containsFood, let issue = model.saveIssue { Notice(text: issue, symbol: "exclamationmark.circle") }
+         } header: { Text("Details") }
+-          footer: {
+-              Text(diary.state.healthEnabled ? "Save also syncs calories and macros to Health. Photos stay in Recomp." : "Saved on this device. Photos stay in Recomp.")
+-          }.disabled(model.busy)
+-    }
+-    private func scale(_ factor: Double) {
+-        inputs.scale(factor); model.setManualTotal(inputs.parsed)
++          footer: { Text(diary.state.healthEnabled ? "Save syncs calories and macros to Health. Photos stay here." : "Saved on this device.") }
++          .disabled(model.busy || importing)
++    }
++    private func ingredientRemoval(for food: EstimatedFood) -> (() -> Void)? {
++        guard model.draft?.estimate.items.contains(where: { $0.id == food.id }) == true else { return nil }
++        return { model.remove(food.id) }
+     }
+     private func prepareUpload() {
+         guard inputs.parsed == model.total, !importing else { return }
++        model.finishManualEditing()
+         do { let config = try EstimatorKeychain.load(); _ = try config.endpoint(); uploadConfiguration = config; confirmUpload = true }
+         catch { model.error = error.localizedDescription }
+     }
+@@ -320,13 +308,104 @@
+             }
+         }
+     }
++    private func importPhotos(_ items: [PhotosPickerItem]) {
++        importTask?.cancel()
++        let ticket = photoImport.begin()
++        let available = max(0, MealPhoto.maximumCount - model.photos.count)
++        importTask = Task {
++            defer {
++                if photoImport.finish(ticket) { selectedPhotos = []; importTask = nil }
++            }
++            do {
++                var prepared: [MealPhoto] = []
++                for item in items.prefix(available) {
++                    try Task.checkCancellation()
++                    guard let data = try await item.loadTransferable(type: Data.self) else { throw EstimateError.imageTooLarge }
++                    try Task.checkCancellation()
++                    prepared.append(try MealPhotoPreparation.from(data: data))
++                }
++                try Task.checkCancellation()
++                guard photoImport.accepts(ticket), !model.busy else { return }
++                model.photos.append(contentsOf: prepared)
++            } catch is CancellationError { }
++            catch { if photoImport.accepts(ticket) { model.error = error.localizedDescription } }
++        }
++    }
++    private func cancelPhotoImport() {
++        photoImport.cancel(); importTask?.cancel(); importTask = nil; selectedPhotos = []
++    }
+     private func save() {
+         guard mode == .log, !saved, !importing else { return }
+         model.setManualTotal(inputs.parsed)
+-        guard let entry = model.entry() else { return }
++        guard let entry = model.entry() else { model.error = model.saveIssue; return }
++        // A no-op Save should not invalidate a completed day or queue Health replacements.
++        if model.isExistingMeal && !model.hasChanges { dismiss(); return }
+         saved = true
+         if diary.saveEntry(entry, makeTemplate: model.makeTemplate) { dismiss(); onSaved?() }
+         else { saved = false; model.error = diary.errorMessage; diary.errorMessage = nil }
++    }
++}
++
++/// Keep the decoded thumbnail while its row identity survives; typing nutrition or notes
++/// should not decode six JPEGs again. ImageIO preparation still runs only on import.
++@MainActor
++private struct MealPhotoTile: View {
++    let photo: MealPhoto
++    let number: Int
++    let onOpen: () -> Void
++    let onRemove: () -> Void
++    @State private var image: UIImage?
++    var body: some View {
++        Button(action: onOpen) {
++            VStack(alignment: .leading, spacing: 5) {
++                Group {
++                    if let image { Image(uiImage: image).resizable().scaledToFill() }
++                    else { Rectangle().fill(Theme.rule).overlay { Image(systemName: "photo").foregroundStyle(Theme.muted) } }
++                }.frame(width: 88, height: 88).clipped().clipShape(RoundedRectangle(cornerRadius: 8))
++                Text("\(number) · \(photo.role.title)").font(.caption).foregroundStyle(Theme.muted)
++                    .lineLimit(2).frame(width: 88, alignment: .leading)
++            }
++        }.buttonStyle(.plain).accessibilityLabel("Photo \(number), \(photo.role.title)")
++            .accessibilityHint("Edit photo details or remove")
++            .contextMenu { Button("Remove photo", role: .destructive, action: onRemove) }
++            .task(id: photo.id) { image = UIImage(data: photo.jpeg) }
++            .onChange(of: photo.jpeg) { _, data in image = UIImage(data: data) }
++    }
++}
++
++@MainActor
++private struct MealPhotoDetails: View {
++    @Environment(\.dismiss) private var dismiss
++    let original: MealPhoto
++    let onDelete: () -> Void
++    let onSave: (MealPhoto) -> Void
++    @State private var photo: MealPhoto
++    @State private var discard = false
++    init(photo: MealPhoto, onDelete: @escaping () -> Void, onSave: @escaping (MealPhoto) -> Void) {
++        original = photo; self.onDelete = onDelete; self.onSave = onSave
++        _photo = State(initialValue: photo)
++    }
++    var body: some View {
++        NavigationStack {
++            Form {
++                if let image = UIImage(data: photo.jpeg) {
++                    Section { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 280).frame(maxWidth: .infinity) }
++                }
++                Section {
++                    Picker("Shows", selection: $photo.role) { ForEach(MealPhotoRole.allCases) { Text($0.title).tag($0) } }
++                    TextField("What should we know?", text: $photo.caption, axis: .vertical).lineLimit(2...4)
++                } footer: { Text("For example: half the packet, or the same plate from another angle.") }
++                Section { Button("Remove photo", role: .destructive) { onDelete(); dismiss() } }
++            }.instrumentForm().navigationTitle("Photo details").navigationBarTitleDisplayMode(.inline)
++                .toolbar {
++                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { if photo != original { discard = true } else { dismiss() } } }
++                    ToolbarItem(placement: .confirmationAction) { Button("Done") { onSave(photo); dismiss() }.disabled(!photo.isValid) }
++                }
++                .interactiveDismissDisabled(photo != original)
++                .confirmationDialog("Discard changes?", isPresented: $discard, titleVisibility: .visible) {
++                    Button("Discard", role: .destructive) { dismiss() }
++                }
++        }
+     }
+ }
+ 
+--- a/Recomp/Views/DayCompletionView.swift
++++ b/Recomp/Views/DayCompletionView.swift
+@@ -5,25 +5,29 @@
+     @EnvironmentObject private var diary: DiaryStore
+     @State private var reviewing = false
+     var body: some View {
+-        VStack(alignment: .leading, spacing: 10) {
+-            SectionHeading(title: "Complete day")
+-            NavigationLink("Travel & food coverage") { TravelCoverageScreen() }
+-            Label(diary.selectedDayReview == nil ? "Not complete" : "Complete", systemImage: diary.selectedDayReview == nil ? "checkmark.circle" : "checkmark.circle.fill")
+-                .font(.headline).foregroundStyle(diary.selectedDayReview == nil ? Color.primary : Theme.accent)
++        VStack(alignment: .leading, spacing: 12) {
++            SectionHeading(title: "Day review", detail: diary.selectedDayReview == nil ? "Not confirmed" : "Confirmed")
+             if let review = diary.selectedDayReview {
+-                Text("Confirmed \(review.total.calories.wholeNumber) kcal · \(review.excludedFromAnalysis ? "excluded from maintenance analysis" : "used after this day ends")")
+-                    .font(.subheadline)
++                Text("\(review.total.calories.wholeNumber) kcal · \(review.excludedFromAnalysis ? "excluded" : "confirmed")")
++                    .font(.system(.subheadline, design: .monospaced)).foregroundStyle(Theme.muted)
+                 if Nutrient.allCases.contains(where: { abs(review.total[$0] - diary.total[$0]) > 0.1 }) {
+                     Notice(text: "Totals changed. Review this day again.", symbol: "exclamationmark.triangle")
+                 }
+-                HStack { Button("Review again") { reviewing = true }; Spacer(); Button("Mark incomplete") { diary.unconfirmSelectedDay() } }.font(.subheadline)
++                ViewThatFits(in: .horizontal) {
++                    HStack { Button("Review again") { reviewing = true }; Spacer(); Button("Mark incomplete") { diary.unconfirmSelectedDay() } }
++                    VStack(alignment: .leading, spacing: 10) { Button("Review again") { reviewing = true }; Button("Mark incomplete") { diary.unconfirmSelectedDay() } }
++                }.font(.subheadline)
+             } else {
+-                Text("Confirm after logging all food and drinks. Maintenance uses confirmed periods only.")
+-                    .font(.subheadline).foregroundStyle(.secondary)
++                Text("Logged everything? Confirm the day for maintenance analysis.")
++                    .font(.subheadline).foregroundStyle(Theme.muted)
+                 Button("Review day") { reviewing = true }.disabled(!diary.canConfirmDay)
+                 if !diary.canConfirmDay && diary.state.healthEnabled && diary.state.includeOtherSources {
+-                    Text("Refresh Health first, or turn off additional Health nutrition in Settings.").font(.caption).foregroundStyle(.secondary)
++                    Text("Refresh Health, or turn off additional Health nutrition in Settings.").font(.caption).foregroundStyle(.secondary)
+                 }
++            }
++            Divider().overlay(Theme.rule)
++            NavigationLink { TravelCoverageScreen() } label: {
++                Label("Travel & food coverage", systemImage: "airplane").font(.subheadline)
+             }
+         }.frame(maxWidth: .infinity, alignment: .leading).surface()
+         .sheet(isPresented: $reviewing) { DayCompletionView(review: diary.selectedDayReview) }
+--- a/Recomp/Views/SettingsScreen.swift
++++ b/Recomp/Views/SettingsScreen.swift
+@@ -16,94 +16,92 @@
+     }
+ }
+ 
++private enum CSVExportKind { case food, body, analysis }
++
+ @MainActor
+ struct SettingsScreen: View {
+     @EnvironmentObject private var diary: DiaryStore
+     @State private var showGoals = false
+     @State private var showEstimatorSettings = false
+-    @State private var confirmConnect = false
+-    @State private var requesting = false
+     @State private var exporting = false
+-    @State private var exportingBody = false
+-    @State private var exportingAnalysis = false
++    @State private var exportDocument = CSVDocument(text: "")
++    @State private var exportName = "Recomp"
+     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+     var body: some View {
+         NavigationStack {
+             Form {
+-                Section("Interface") {
+-                    Picker("Appearance", selection: $appearance) {
+-                        ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
++                Section("Food") {
++                    Button { showGoals = true } label: {
++                        LabeledContent("Daily targets", value: "\(diary.state.targets.calories.wholeNumber) kcal")
+                     }
+-                    NavigationLink { InterfacePreviewScreen() } label: {
+-                        Label("Interface preview", systemImage: "rectangle.on.rectangle")
+-                    }
++                    NavigationLink { SavedFoodsSettings() } label: {
++                        Label("Your usuals", systemImage: "bookmark")
++                    }.accessibilityIdentifier("settings.usuals")
++                    Button { showEstimatorSettings = true } label: { Label("Photo & text estimates", systemImage: "camera") }
+                 }
+-                Section("Tools") {
+-                    NavigationLink("Backup & restore") { BackupScreen() }
+-                    NavigationLink("Activity & notes") { ActivityContextScreen() }
+-                    NavigationLink("Home Screen widget") { WidgetSettingsScreen() }
++                Section("Connections") {
++                    NavigationLink { HealthSettingsScreen() } label: { Label("Apple Health", systemImage: "heart") }
++                    NavigationLink { ActivityContextScreen() } label: { Label("Activity & notes", systemImage: "figure.run") }
++                    NavigationLink { DXAScansScreen() } label: { Label("DEXA reports & exports", systemImage: "doc.text") }
+                 }
+-                Section("Daily targets") {
+-                    ForEach(Nutrient.allCases) { nutrient in
+-                        LabeledContent(nutrient.title, value: "\(diary.state.targets[nutrient].displayNumber) \(nutrient.unit)")
+-                    }
+-                    Button("Edit targets") { showGoals = true }
+-                }
+-                Section {
+-                    Button { showEstimatorSettings = true } label: { Label("Photo & text estimates", systemImage: "camera") }
+-                    Text("Optional AI for photos and descriptions. Manual entry works without it.")
+-                        .font(.caption).foregroundStyle(.secondary)
+-                } header: { Text("AI food estimation") }
+-                Section("Measurements & maintenance") {
+-                    NavigationLink("DEXA reports & exports") { DXAScansScreen() }
++                Section("Preferences") {
+                     Picker("Measurement units", selection: Binding(get: { diary.state.measurementUnits }, set: { diary.setMeasurementUnits($0) })) {
+                         ForEach(MeasurementUnits.allCases) { Text($0.title).tag($0) }
+                     }
+-                    Text("Log measurements in Body. Review calorie targets in Maintenance.")
+-                        .font(.caption).foregroundStyle(.secondary)
++                    Picker("Appearance", selection: $appearance) { ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) } }
++                    NavigationLink { WidgetSettingsScreen() } label: { Label("Home Screen widget", systemImage: "rectangle.on.rectangle") }
+                 }
+-                healthSection
+-                Section("Food") {
+-                    NavigationLink { SavedFoodsSettings() } label: {
+-                        Label("Your usuals", systemImage: "bookmark")
+-                    }.accessibilityIdentifier("settings.usuals")
+-                }
+-                Section {
+-                    Button { exporting = true } label: { Label("Food CSV", systemImage: "square.and.arrow.up") }
+-                        .disabled(diary.state.entries.isEmpty)
+-                    Button("Measurements CSV") { exportingBody = true }.disabled(diary.state.measurements.isEmpty)
+-                    Button("Analysis CSV") { exportingAnalysis = true }.disabled(diary.state.dayReviews.isEmpty)
+-                } header: { Text("Your data") }
+-                  footer: { Text("CSVs are readable exports, not backups. They exclude raw Health records. Use Backup & restore to save a restorable copy.") }
+-                Section {
++                Section("Data") {
++                    NavigationLink { BackupScreen() } label: { Label("Backup & restore", systemImage: "externaldrive") }
++                    DisclosureGroup("Export CSV") {
++                        Button("Food") { export(.food) }.disabled(diary.state.entries.isEmpty)
++                        Button("Measurements") { export(.body) }.disabled(diary.state.measurements.isEmpty)
++                        Button("Analysis history") { export(.analysis) }.disabled(!AnalysisCSV.hasRecords(in: diary.state))
++                        Text("Readable exports, not backups. Use Backup & restore for a restorable copy.")
++                            .font(.caption).foregroundStyle(.secondary)
++                    }
+                     NavigationLink("Privacy & data") { PrivacyDetailsScreen() }
+                 }
+                 Section {
+-                    Text("Recomp 1.10").font(.system(.caption, design: .monospaced)).tracking(1).foregroundStyle(Theme.muted)
++                    NavigationLink { InterfacePreviewScreen() } label: { Label("Interface preview", systemImage: "rectangle.on.rectangle") }
++                } footer: {
++                    Text("Recomp 1.10.1").font(.system(.caption, design: .monospaced)).foregroundStyle(Theme.muted)
+                 }
+             }
+-            .instrumentForm()
+-            .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
++            .instrumentForm().navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
+             .sheet(isPresented: $showGoals) { GoalsEditor(targets: diary.state.targets) }
+             .sheet(isPresented: $showEstimatorSettings) { EstimatorSettingsView() }
++            .fileExporter(isPresented: $exporting, document: exportDocument,
++                          contentType: .commaSeparatedText, defaultFilename: exportName) { result in
++                if case .failure(let error) = result { diary.errorMessage = error.localizedDescription }
++                exportDocument = CSVDocument(text: "")
++            }
++        }
++    }
++    // Construct only the requested export, when tapped, not all CSVs on every Form render.
++    private func export(_ kind: CSVExportKind) {
++        switch kind {
++        case .food: exportDocument = CSVDocument(text: DiaryCSV.make(entries: diary.state.entries)); exportName = "Recomp-food-log"
++        case .body: exportDocument = CSVDocument(text: BodyCSV.make(diary.state.measurements, locations: diary.state.scaleLocations)); exportName = "Recomp-measurements"
++        case .analysis: exportDocument = CSVDocument(text: AnalysisCSV.make(state: diary.state)); exportName = "Recomp-analysis-history"
++        }
++        exporting = true
++    }
++}
++
++@MainActor
++private struct HealthSettingsScreen: View {
++    @EnvironmentObject private var diary: DiaryStore
++    @State private var confirmConnect = false
++    @State private var requesting = false
++    var body: some View {
++        Form { healthSection }
++            .instrumentForm().navigationTitle("Apple Health").navigationBarTitleDisplayMode(.inline)
+             .confirmationDialog("Connect Apple Health?", isPresented: $confirmConnect, titleVisibility: .visible) {
+                 Button("Connect and export logged meals") { connect() }
+             } message: {
+                 Text("Request permission to write calories and macros, and read nutrition plus body weight. Existing Recomp meals will be queued for export too. You control each permission.")
+             }
+-            .fileExporter(isPresented: $exportingBody, document: CSVDocument(text: BodyCSV.make(diary.state.measurements, locations: diary.state.scaleLocations)),
+-                          contentType: .commaSeparatedText, defaultFilename: "Recomp-measurements") { result in
+-                if case .failure(let error) = result { diary.errorMessage = error.localizedDescription }
+-            }
+-            .fileExporter(isPresented: $exportingAnalysis, document: CSVDocument(text: AnalysisCSV.make(state: diary.state)),
+-                          contentType: .commaSeparatedText, defaultFilename: "Recomp-analysis-history") { result in
+-                if case .failure(let error) = result { diary.errorMessage = error.localizedDescription }
+-            }
+-            .fileExporter(isPresented: $exporting, document: CSVDocument(text: DiaryCSV.make(entries: diary.state.entries)),
+-                          contentType: .commaSeparatedText, defaultFilename: "Recomp-food-log") { result in
+-                if case .failure(let error) = result { diary.errorMessage = error.localizedDescription }
+-            }
+-        }
+     }
+     private var healthSection: some View {
+         Section {
+--- a/RecompUITests/RecompUITests.swift
++++ b/RecompUITests/RecompUITests.swift
+@@ -129,4 +129,32 @@
+         XCTAssertTrue(app.navigationBars["Edit food"].waitForExistence(timeout: 5))
+         XCTAssertTrue(app.buttons["food.photos"].exists)
+     }
++
++    func testUndoRestoresAnEditedMeal() {
++        addFood()
++        app.buttons.matching(identifier: "food.entry").firstMatch.tap()
++        replace("nutrition.calories", with: "600")
++        let undo = app.buttons["food.undo"]
++        XCTAssertTrue(undo.waitForExistence(timeout: 3)); undo.tap()
++        XCTAssertEqual(app.textFields["nutrition.calories"].value as? String, "500")
++        app.buttons["food.save"].tap()
++        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 1)
++    }
++    func testPortionShortcutUpdatesFields() {
++        addFood()
++        app.buttons.matching(identifier: "food.entry").firstMatch.tap()
++        let half = app.buttons["food.half"]
++        for _ in 0..<6 { if half.isHittable { break }; app.swipeUp() }
++        XCTAssertTrue(half.exists); half.tap()
++        XCTAssertEqual(app.textFields["nutrition.calories"].value as? String, "250")
++        app.buttons["food.undo"].tap()
++        XCTAssertEqual(app.textFields["nutrition.calories"].value as? String, "500")
++    }
++    func testHealthSettingsOpensWithoutConnecting() {
++        app.tabBars.buttons["Settings"].tap()
++        app.buttons["Apple Health"].tap()
++        XCTAssertTrue(app.navigationBars["Apple Health"].waitForExistence(timeout: 5))
++        // Never tap Connect: tests must not publish synthetic diary values.
++        XCTAssertTrue(app.buttons["Connect Apple Health"].exists || app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'unavailable'")).count > 0)
++    }
+ }
+--- a/Tests/RecompCoreTests/SecondAuditTests.swift
++++ b/Tests/RecompCoreTests/SecondAuditTests.swift
+@@ -257,3 +257,61 @@
+         }
+     }
+ }
++
++final class PolishCoreTests: XCTestCase {
++    func testPhotoBatchOnlyLatestCanFinish() {
++        var session = PhotoImportSession()
++        XCTAssertFalse(session.isActive)
++        let first = session.begin(), second = session.begin()
++        XCTAssertNotEqual(first, second)
++        XCTAssertFalse(session.accepts(first))
++        XCTAssertFalse(session.finish(first))
++        XCTAssertTrue(session.isActive)
++        XCTAssertTrue(session.accepts(second))
++        XCTAssertTrue(session.finish(second))
++        XCTAssertFalse(session.isActive)
++    }
++    func testCancelledPhotoBatchCannotCommit() {
++        var session = PhotoImportSession()
++        let first = session.begin()
++        session.cancel()
++        XCTAssertFalse(session.accepts(first)); XCTAssertFalse(session.finish(first))
++        let second = session.begin()
++        XCTAssertFalse(session.finish(first)); XCTAssertTrue(session.accepts(second))
++    }
++    func testCompletedPhotoBatchCannotFinishTwice() {
++        var session = PhotoImportSession()
++        let ticket = session.begin()
++        XCTAssertTrue(session.finish(ticket)); XCTAssertFalse(session.finish(ticket))
++    }
++    func testRapidPhotoReplacementStateMachine() {
++        var session = PhotoImportSession()
++        var previous: UUID?
++        // Every outstanding earlier completion is stale, including after an explicit cancel.
++        for i in 0..<1000 {
++            let ticket = session.begin()
++            if let previous { XCTAssertFalse(session.finish(previous)) }
++            if i.isMultiple(of: 3) {
++                session.cancel(); XCTAssertFalse(session.accepts(ticket))
++            } else { XCTAssertTrue(session.accepts(ticket)); XCTAssertTrue(session.finish(ticket)) }
++            previous = ticket
++        }
++    }
++    func testEmptyAnalysisHasNoCSVRecords() {
++        XCTAssertFalse(AnalysisCSV.hasRecords(in: AppState()))
++    }
++    func testTargetHistoryExportWithoutCompleteFoodDay() {
++        var state = AppState()
++        state.recordTargets(Nutrition(calories: 2400, protein: 170, carbs: 260, fat: 75), at: Date(), reason: "Synthetic change")
++        XCTAssertTrue(state.dayReviews.isEmpty)
++        XCTAssertTrue(AnalysisCSV.hasRecords(in: state))
++        XCTAssertTrue(AnalysisCSV.make(state: state).contains("targets_after"))
++    }
++    func testRemovedTargetHistoryDisablesEmptyExport() {
++        var state = AppState()
++        state.recordTargets(Nutrition(calories: 2400), at: Date(), reason: "Synthetic change")
++        XCTAssertTrue(AnalysisCSV.hasRecords(in: state))
++        state.targetRevisions = []
++        XCTAssertFalse(AnalysisCSV.hasRecords(in: state))
++    }
++}
+--- a/TestSupport/PolishHarness/Estimation.swift
++++ b/TestSupport/PolishHarness/Estimation.swift
+@@ -0,0 +1,16 @@
++import Foundation
++// Controllable fake provider, deliberately no network call or platform framework.
++@MainActor enum EstimationService {
++    static var received: EstimateRequest?
++    static var response = MealEstimate(title: "Synthetic meal", items: [EstimatedFood(id: "food", name: "Synthetic", portion: "1 serving", nutrition: Nutrition(calories: 200, protein: 20, carbs: 15, fat: 7))])
++    static var fail = false
++    static var held = false
++    static var waiting: CheckedContinuation<Void, Never>?
++    static func estimate(_ input: EstimateRequest, configuration: EstimatorConfiguration) async throws -> MealEstimate {
++        received = input
++        if held { await withCheckedContinuation { waiting = $0 } } else { await Task.yield() }
++        if fail { throw EstimateError.invalidResponse }
++        return response
++    }
++    static func release() { held = false; let continuation = waiting; waiting = nil; continuation?.resume() }
++}
+--- a/TestSupport/PolishHarness/Harness.swift
++++ b/TestSupport/PolishHarness/Harness.swift
+@@ -0,0 +1,161 @@
++import Foundation
++
++@main struct PolishHarness {
++    @MainActor static func main() async throws {
++        var checks = 0, failures = 0
++        func check(_ condition: @autoclosure () -> Bool, _ name: String) {
++            checks += 1
++            if condition() { print("PASS: \(name)") }
++            else { failures += 1; print("FAIL: \(name)") }
++        }
++        func settle(_ model: MealEstimatorModel) async {
++            for _ in 0..<5000 { if !model.busy { return }; await Task.yield() }
++        }
++        let now = Date().addingTimeInterval(-120)
++        let verified = FoodTemplate(name: "Labelled shake", nutrition: Nutrition(calories: 230, protein: 42, carbs: 9, fat: 3.5), isEstimate: false)
++        let estimated = FoodTemplate(name: "Curry", nutrition: Nutrition(calories: 900, protein: 40, carbs: 100, fat: 38), isEstimate: true)
++        let a = MealEstimatorModel(date: now)
++        a.useTemplate(verified)
++        a.useTemplate(estimated)
++        a.undo()
++        check(a.total == verified.nutrition && a.foodName == verified.name, "undo restores saved food values and name")
++        check(!a.estimated, "undo restores saved food verified status")
++        check(a.description == verified.name, "undo restores matching food context, not replacement context")
++
++        let big = MealEstimatorModel(date: now)
++        big.rename("Large batch")
++        let large = Nutrition(calories: 25_000, protein: 3500)
++        big.setManualTotal(large)
++        big.useTemplate(verified)
++        big.undo()
++        check(big.total == large && big.foodName == "Large batch", "undo restores manual values outside the AI schema")
++
++        let photo = MealPhoto(jpeg: Data([0xff,0xd8,0x01,0xff,0xd9]), role: .nutritionLabel)
++        let item = EstimatedFood(id: "shake", name: "Shake", portion: "one bottle", nutrition: verified.nutrition,
++            evidence: [FoodEvidence(kind: .label, photoNumber: 1, detail: "Label, one bottle")])
++        var entry = FoodEntry(name: "Shake", date: now, meal: .snack, nutrition: item.nutrition)
++        entry.aiDraft = EstimateDraft(estimate: MealEstimate(title: "Shake", items: [item]), context: "Shake")
++        entry.photos = [photo]
++        let lock = MealEstimatorModel(date: now, original: entry)
++        lock.toggleLock(item.id); lock.undo()
++        check(lock.draft?.estimate.items.first?.evidence?.first?.photoNumber == 1,
++              "undo of lock preserves unchanged photo references")
++        check(!lock.hasChanges, "toggle lock then undo leaves original meal unchanged")
++        lock.photos = []
++        check(lock.draft?.estimate.items.first?.evidence?.first?.photoNumber == nil,
++              "removed photo cannot leave a visible stale source number")
++
++        let dup = MealEstimatorModel(date: now)
++        dup.rename("Meal"); dup.photos = [photo, photo]
++        check(!dup.canRequest, "duplicate photo identities are rejected before AI request")
++
++        let clocks = MealEstimatorModel(date: now)
++        clocks.useTemplate(verified); clocks.zoneID = "not/a/timezone"
++        check(!clocks.canSave, "invalid entry timezone disables saving, rather than silently doing nothing")
++
++        let overflow = MealEstimatorModel(date: now)
++        overflow.rename("Recipe")
++        overflow.description = String(repeating: "a", count: 8001)
++        overflow.setManualTotal(verified.nutrition)
++        check(overflow.draft == nil, "overlong typed context is not silently truncated into an AI draft")
++
++        let verifiedAI = MealEstimatorModel(date: now)
++        verifiedAI.useTemplate(verified)
++        verifiedAI.clarification = "Add a banana"
++        verifiedAI.begin(configuration: EstimatorConfiguration()); await settle(verifiedAI)
++        check(verifiedAI.estimated, "new AI response is estimated")
++        verifiedAI.undo()
++        check(!verifiedAI.estimated && verifiedAI.total == verified.nutrition,
++              "undo of AI response restores earlier verified values and status")
++
++        let empty = MealEstimatorModel(date: now)
++        empty.rename("Typing test"); empty.setManualTotal(verified.nutrition); empty.finishManualEditing()
++        empty.setManualTotal(nil)
++        let revision = empty.inputRevision
++        empty.undo()
++        check(empty.inputRevision > revision && empty.manualInputValid && empty.total == verified.nutrition,
++              "undo invalid text requests a field reset even with identical numeric totals")
++        empty.setManualTotal(nil); empty.useTemplate(estimated); empty.undo()
++        check(empty.manualInputValid && empty.total == verified.nutrition,
++              "undo of replacement repairs invalid input to its last valid total")
++
++        let removal = MealEstimatorModel(date: now, original: entry)
++        removal.remove(item.id)
++        check(removal.total == .zero && !removal.history.isEmpty && !removal.canSave, "last-food removal keeps an undo checkpoint")
++        removal.undo()
++        check(removal.total == entry.nutrition && removal.canSave, "undo restores the last removed food")
++        let originalCheckpointCount = removal.history.count
++        removal.toggleLock("missing"); removal.remove("missing")
++        check(removal.history.count == originalCheckpointCount && removal.draft?.isValid == true, "unknown IDs do not corrupt locks or history")
++        check(!removal.editorLock(for: item), "unchanged unlocked food opens unlocked")
++        check(removal.editorLock(for: removal.addBlankFood()), "new manual ingredient opens protected")
++
++        let same = MealEstimatorModel(date: now)
++        same.useTemplate(verified); same.setManualTotal(nil)
++        let sameRevision = same.inputRevision
++        same.useTemplate(verified)
++        check(same.inputRevision > sameRevision && same.canSave, "same-value template replaces malformed field text")
++
++        var two = entry
++        let second = EstimatedFood(id: "banana", name: "Banana", portion: "1 banana", nutrition: Nutrition(calories: 100, protein: 1, carbs: 25))
++        two.aiDraft!.estimate.items.append(second)
++        two.nutrition = two.aiDraft!.estimate.total
++        let scaling = MealEstimatorModel(date: now, original: two)
++        scaling.scalePortion(by: 0.5)
++        check(scaling.draft?.estimate.items.map(\.id) == [item.id, second.id], "portion scaling preserves ingredient identities")
++        check(scaling.total == two.nutrition.scaled(by: 0.5), "portion scaling sums the individual scaled ingredients")
++        check(scaling.draft?.estimate.items[1].portion == "0.5 × (1 banana)", "portion descriptions reflect the scale")
++        check(scaling.draft?.lockedItemIDs == [item.id, second.id], "explicit scaled portions are protected from AI reversal")
++        check(!scaling.estimated && scaling.entry()?.id == entry.id, "known fraction keeps verification and saved meal identity")
++        scaling.undo()
++        check(scaling.total == two.nutrition && scaling.draft == two.aiDraft, "undo scaling restores exact breakdown and sources")
++        check(scaling.photos == [photo] && scaling.date == now, "undo leaves photo and timestamp alone")
++        check(!scaling.canScale(by: .nan) && !scaling.canScale(by: -1) && !scaling.canScale(by: 0), "invalid portion factors disabled")
++        scaling.setManualTotal(Nutrition(calories: 1_000_000))
++        check(!scaling.canScale(by: 2), "portion overflow disabled before altering the fields")
++        let beforeOverflow = scaling.total; scaling.scalePortion(by: 2)
++        check(scaling.total == beforeOverflow, "rejected scaling preserves the last valid total")
++        scaling.scalePortion(by: 0.5)
++        check(scaling.total.calories == 500_000 && scaling.canSave, "manual amounts above the AI range still scale safely")
++
++        let changedPhotos = MealEstimatorModel(date: now, original: entry)
++        changedPhotos.toggleLock(item.id)
++        changedPhotos.photos = [MealPhoto(jpeg: photo.jpeg, role: .plate)]
++        changedPhotos.undo()
++        check(changedPhotos.draft?.estimate.items[0].evidence?.first?.photoNumber == nil, "undo never restores a number against replacement photos")
++
++        let stale = MealEstimatorModel(date: now)
++        stale.rename("Plate"); stale.photos = [photo]
++        EstimationService.held = true
++        stale.begin(configuration: EstimatorConfiguration())
++        for _ in 0..<5000 { if EstimationService.waiting != nil { break }; await Task.yield() }
++        check(EstimationService.waiting != nil, "AI request held deterministically before response")
++        stale.photos = []
++        EstimationService.release(); await settle(stale)
++        check(stale.total == .zero && stale.error != nil, "response cannot overwrite draft after its photo set changes")
++        check(stale.history.isEmpty, "discarded late response creates no undo state")
++
++        let future = MealEstimatorModel(date: now)
++        future.useTemplate(verified); future.date = Date().addingTimeInterval(86400)
++        check(!future.canSave && future.saveIssue != nil, "future food has an actionable validation message")
++        future.date = Date(timeIntervalSince1970: .infinity)
++        check(!future.canSave && future.entry() == nil, "nonfinite dates cannot create a food entry")
++
++        let many = MealEstimatorModel(date: now)
++        for i in 1...40 { many.useTemplate(FoodTemplate(name: "Food \(i)", nutrition: Nutrition(calories: Double(i)), isEstimate: false)) }
++        check(many.history.count == 20, "undo retains at most twenty nutritional checkpoints")
++        for _ in 0..<20 { many.undo() }
++        check(many.foodName == "Food 20" && many.total.calories == 20 && many.history.isEmpty, "bounded undo stack restores sequential values")
++        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("polish-" + UUID().uuidString)
++        defer { try? FileManager.default.removeItem(at: dir) }
++        let store = DiaryStore(fileURL: dir.appendingPathComponent("diary.json"), health: HealthKitService())
++        let roundtrip = MealEstimatorModel(date: now, original: entry)
++        roundtrip.scalePortion(by: 0.5)
++        check(store.saveEntry(roundtrip.entry()!, makeTemplate: false), "scaled food saves using actual coordinator/filesystem")
++        let reloaded = DiaryStore(fileURL: dir.appendingPathComponent("diary.json"), health: HealthKitService())
++        check(reloaded.state.entries[0].nutrition == entry.nutrition.scaled(by: 0.5) && reloaded.state.entries[0].photos == [photo],
++              "scaled food, sources and photos survive a real disk reload")
++        print("\(checks) polish regressions; \(failures) failures. Actual composer; mocked AI and observation.")
++        if failures > 0 { exit(1) }
++    }
++}
+--- a/scripts/check.sh
++++ b/scripts/check.sh
+@@ -8,8 +8,10 @@
+ ./scripts/check-store.sh
+ ./scripts/check-estimator.sh
+ ./scripts/check-composer.sh
++./scripts/check-polish.sh
+ ./scripts/check-startup.sh
+ python3 scripts/check-ui-refresh.py
++python3 scripts/check-polish-ui.py
+ ./scripts/check-audit.sh
+ ./scripts/check-audit2.sh
+ ./scripts/check-travel.sh
+--- a/scripts/check-polish-ui.py
++++ b/scripts/check-polish-ui.py
+@@ -0,0 +1,36 @@
++#!/usr/bin/env python3
++"""Source contracts only; these are not a native UI execution or accessibility audit."""
++from pathlib import Path
++r = Path(__file__).resolve().parents[1]
++f = (r/'Recomp/Views/MealEstimatorView.swift').read_text()
++i = (r/'Recomp/Views/EstimatedFoodEditor.swift').read_text()
++s = (r/'Recomp/Views/SettingsScreen.swift').read_text()
++h = (r/'Recomp/Views/RootView.swift').read_text()
++d = (r/'Recomp/Views/InstrumentStyle.swift').read_text()
++n = 0
++def check(value, label):
++    global n
++    assert value, label
++    n += 1; print('PASS:', label)
++check('private enum FoodSheet' in f and f.count('.sheet(item: $sheet)') == 1, 'Single modal route for settings, saved foods, ingredients and photos')
++check('onChange(of: model.inputRevision)' in f, 'Canonical draft replacement refreshes numeric fields even at equal totals')
++check('onEditingEnded: { model.finishManualEditing() }' in f, 'Typing undo groups end with field focus')
++check('food.undo' in f and 'ToolbarItem(placement: .topBarTrailing)' in f, 'Undo is a toolbar action independent of item count')
++check('PhotoImportSession()' in f and 'photoImport.accepts(ticket)' in f and 'photoImport.finish(ticket)' in f, 'Stale photo batches cannot commit or clear a newer load')
++check('model.photos.append(contentsOf: prepared)' in f, 'Photo selection commits a complete prepared batch')
++check('private struct MealPhotoTile' in f and '@State private var image: UIImage?' in f, 'Decoded thumbnails retained across unrelated form edits')
++check('model.scalePortion(by:' in f and 'inputs.scale(' not in f, 'Portion actions use tested ingredient-preserving operation')
++check('model.isExistingMeal && !model.hasChanges' in f, 'No-op save closes without a diary or Health write')
++check('model.editorLock(for: food)' in f, 'Unchanged ingredient lock survives opening its editor')
++check('interactiveDismissDisabled(hasChanges)' in i and 'confirmDiscard' in i, 'Ingredient sheet guards unsaved changes')
++check('original.evidence' in i and 'DisclosureGroup("Sources")' in i, 'Food evidence remains available in ingredient editor')
++check('HealthSettingsScreen()' in s and 'private struct HealthSettingsScreen' in s, 'Health connection controls live in a submenu')
++check('private func export(_ kind: CSVExportKind)' in s and 'document: exportDocument' in s, 'CSV data prepared on request, not every form render')
++check('AnalysisCSV.hasRecords(in: diary.state)' in s, 'History-only analysis exports remain enabled')
++check('NavigationLink { SavedFoodsSettings() }' in s, 'Saved foods remains a submenu')
++check('IntakeRings' in d and 'ViewThatFits(in: .horizontal)' in d and 'private var stacked' in d, 'Compact rings use a stacked fallback')
++check('return "At target"' in d and 'abs(remaining) < 1' in d, 'Small balances do not read as zero over target')
++check('accessibilityReduceMotion' in d and 'dynamicType.isAccessibilitySize' in d, 'Reduced motion and large type retained')
++check('if !status.isEmpty' in h and 'return "Saved on device"' not in h, 'Successful per-meal status is not repeated on every row')
++check('Label("Check food"' in h and 'Label("Log food"' in h, 'Check stays separate from actual logging')
++print(f'{n} polish source contracts passed. NOT native rendering or UI behavior tests.')
+--- a/scripts/make_project.py
++++ b/scripts/make_project.py
+@@ -139,7 +139,7 @@
+     app = {
+         'ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME':'AccentColor',
+         'CODE_SIGN_STYLE':'Automatic','CODE_SIGN_ENTITLEMENTS':'Recomp/Recomp.entitlements',
+-        'DEVELOPMENT_TEAM':args.team,'CURRENT_PROJECT_VERSION':'14','MARKETING_VERSION':'1.10',
++        'DEVELOPMENT_TEAM':args.team,'CURRENT_PROJECT_VERSION':'15','MARKETING_VERSION':'1.10.1',
+         'RECOMP_APP_GROUP':args.app_group,
+         'GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'Recomp/Info.plist',
+         'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks',
+--- a/scripts/check-ui-refresh.py
++++ b/scripts/check-ui-refresh.py
+@@ -18,7 +18,7 @@
+ check('quickAdd' not in home and 'Your usuals' not in home,'Usuals removed from home')
+ check('FoodEditor(entry:' in home and 'case .log: FoodEditor' in home,'Home/widget open same food flow')
+ check('MealEstimatorView(' in read('Recomp/Views/FoodEditor.swift'),'Manual editor delegates to unified composer')
+-check('NutritionFields(inputs: nutritionBinding)' in form and 'photoSection' in form,'Typed totals and photos in same form')
++check('NutritionFields(inputs: nutritionBinding' in form and 'photoSection' in form,'Typed totals and photos in same form')
+ check('if mode == .log' in form and 'guard mode == .log' in form,'Check cannot save without explicit mode switch')
+ check('Log this food' in form and 'mode = .log' in form,'Check handoff remains explicit')
+ check('saved ||' not in form or 'guard mode' in form,'Save path guarded')
+--- a/scripts/check-polish.sh
++++ b/scripts/check-polish.sh
+@@ -0,0 +1,10 @@
++#!/usr/bin/env bash
++set -euo pipefail
++cd "$(dirname "$0")/.."
++work=$(mktemp -d)
++trap 'rm -rf "$work"' EXIT
++sed '/^import Combine$/d' Recomp/Services/DiaryStore.swift > "$work/DiaryStore.swift"
++sed '/^import Combine$/d' Recomp/Services/MealEstimatorModel.swift > "$work/MealEstimatorModel.swift"
++swiftc -swift-version 5 -parse-as-library Recomp/Core/*.swift "$work/DiaryStore.swift" "$work/MealEstimatorModel.swift" \
++  TestSupport/StoreHarness/Mocks.swift TestSupport/PolishHarness/Estimation.swift TestSupport/PolishHarness/Harness.swift -o "$work/polish"
++"$work/polish"

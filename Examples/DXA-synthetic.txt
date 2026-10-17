@@ -1,0 +1,22 @@
+SYNTHETIC EXAMPLE — NOT A MEDICAL REPORT
+Use only to test the import review interface.
+Scan date: 2026-09-01
+Provider: Example clinic
+Scanner: Example scanner A
+
+Total Body Fat %: 20.0%
+Total Body Mass: 85.0 kg
+Total Body Fat Mass: 17.0 kg
+Total Body Lean Soft Tissue: 65.0 kg
+Total Body Bone Mineral Content: 3,000 g
+VAT Mass: 350 g
+VAT Area: 55 cm2
+Estimated RMR: 1750 kcal/day
+
+These lines are intentionally not auto-imported:
+Total Mass: 85 kg 84 kg
+Trunk | 21% | 8.2 kg | 30 kg
+Measured date: 09/01/2026
+
+Confirm scan date, metric, units and anatomical site yourself.
+Do not interpret these synthetic values as targets or diagnoses.

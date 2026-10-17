@@ -1,0 +1,1529 @@
+diff --git a/.github/workflows/check.yml b/.github/workflows/check.yml
+index b2179e2..1d37d53 100644
+--- a/.github/workflows/check.yml
++++ b/.github/workflows/check.yml
+@@ -1,11 +1,23 @@
+-name: Check core and iOS build
++name: Recomp regression and native acceptance
+ on: [push, pull_request, workflow_dispatch]
+ permissions:
+   contents: read
+ jobs:
+   check:
+     runs-on: macos-15
++    timeout-minutes: 35
+     steps:
+       - uses: actions/checkout@v4
+-      - name: Core tests and unsigned iOS simulator build
+-        run: ./scripts/check.sh
++      - uses: actions/setup-node@v4
++        with:
++          node-version: '22'
++      - name: Core, coordinator, server, native crypto and simulator UI tests
++        run: ./scripts/check.sh --require-native
++      - name: Preserve native logs, screenshots and XCTest results
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: recomp-native-results
++          path: .native-results/
++          include-hidden-files: true
++          if-no-files-found: warn
+diff --git a/.gitignore b/.gitignore
+index 3656aa8..9b855e1 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -15,3 +15,8 @@ Server/.env
+ Server/.env.*
+ !Server/.env.example
+ Server/node_modules/
++
++.native-results/
++.derivedData-audit/
++
++.build-*/
+diff --git a/Recomp.xcodeproj/project.pbxproj b/Recomp.xcodeproj/project.pbxproj
+index bbd2ced..a6862a8 100644
+--- a/Recomp.xcodeproj/project.pbxproj
++++ b/Recomp.xcodeproj/project.pbxproj
+@@ -129,26 +129,90 @@
+ 		01138FB9EB584A0E17CB6033 = { isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (937482ABB878E91B9DF8E0F5, ); name = "Embed App Extensions"; runOnlyForDeploymentPostprocessing = 0; };
+ 		5632E9FDC70F2DC0B2D4E983 = { isa = PBXContainerItemProxy; containerPortal = 98F54143AB4E86B28C3AFEE0; proxyType = 1; remoteGlobalIDString = 704A160D8849979DE00DDB64; remoteInfo = RecompWidget; };
+ 		4DA75641BEA61A776F463463 = { isa = PBXTargetDependency; target = 704A160D8849979DE00DDB64; targetProxy = 5632E9FDC70F2DC0B2D4E983; };
++		25DAC66CFBB439B7974F3254 = { isa = PBXBuildFile; fileRef = 82CCDBFAA8DA47E86E9035E5; };
++		49FE2FC4836A8B62B042D5B8 = { isa = PBXBuildFile; fileRef = 69DE4EB5776F3097E692B2CE; };
++		D2E908323F29B2629657B44B = { isa = PBXBuildFile; fileRef = 8C51A2E254F86D013516BBCD; };
++		802D4942345F53B4206CF88F = { isa = PBXBuildFile; fileRef = 251319FA519115DA68B6877C; };
++		CDAA2C5310E5AE933C5B514A = { isa = PBXBuildFile; fileRef = 2FE92BF8FBDCDD805D69B1C4; };
++		71905884704F12E7901D8F47 = { isa = PBXBuildFile; fileRef = 3FCAAF22115ED1BDA3621414; };
++		2CDD0E268C195DAB2B0C9F88 = { isa = PBXBuildFile; fileRef = 48C2928B26796813094ED4B6; };
++		54E2058E2013BD4D37A960C8 = { isa = PBXBuildFile; fileRef = C7314A972FE8A4B723AB2E27; };
++		A82C4612F532424037ADD9CC = { isa = PBXBuildFile; fileRef = 563C5DC70B48B5A4F61AF203; };
++		84EE95E34FC51A8BEA6A88AA = { isa = PBXBuildFile; fileRef = 3D7BD6352F42BFB2C9D0612C; };
++		7C65DA42FDAECBBE1CB96C98 = { isa = PBXBuildFile; fileRef = B5BE04724B110A876807EBE9; };
++		6C8664121DCA8647010513AB = { isa = PBXBuildFile; fileRef = 8C3E5D2036F7BAFA084C835E; };
++		69960AF313EC40C68B143C86 = { isa = PBXBuildFile; fileRef = 3A4F2CA7E918E846733DE804; };
++		9ACFAB585A4A04D3892F57E3 = { isa = PBXBuildFile; fileRef = 19365E0B1DD9A2884DAF8087; };
++		848D598FC14ED0CE8A978264 = { isa = PBXBuildFile; fileRef = 3829805E2BF8689AF07D7354; };
++		B59357CC8088C84E2A911ECC = { isa = PBXBuildFile; fileRef = 9B69E8ED9F6194EAF25D802D; };
++		A0EABA3DA2082994156520F6 = { isa = PBXBuildFile; fileRef = 74818F768F57C636FC519884; };
++		10B62FFE6D9AC4EDC6086643 = { isa = PBXBuildFile; fileRef = 7C36A7065002F33F79879E24; };
++		A09CC6007705EF1D4D0E39DE = { isa = PBXBuildFile; fileRef = 86DB79EF7D7E6EB42120BAB0; };
++		712082543610CE2C9CECF4F5 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/AdaptiveTests.swift"; sourceTree = "<group>"; };
++		530C76374DC1E9501784775A = { isa = PBXBuildFile; fileRef = 712082543610CE2C9CECF4F5; };
++		18E1D2953B1DAC8E340E6867 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/AuditRegressionTests.swift"; sourceTree = "<group>"; };
++		EEE9520D28A3BAD4218FBAE6 = { isa = PBXBuildFile; fileRef = 18E1D2953B1DAC8E340E6867; };
++		46E0565851DD54BE51372A19 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/BodyTests.swift"; sourceTree = "<group>"; };
++		B3058EBFA8E1D98D26FF746E = { isa = PBXBuildFile; fileRef = 46E0565851DD54BE51372A19; };
++		B13F9556C149737E3C642380 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/DXAHealthTests.swift"; sourceTree = "<group>"; };
++		D8E8A4C6094D4142CEAEDFEF = { isa = PBXBuildFile; fileRef = B13F9556C149737E3C642380; };
++		E2FE03BABF24FC5FF2B8E56C = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/DXATests.swift"; sourceTree = "<group>"; };
++		D7B25D851951285A6DC38CE5 = { isa = PBXBuildFile; fileRef = E2FE03BABF24FC5FF2B8E56C; };
++		8C1765B59E344CCAAB5C8FA7 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/Feature17Tests.swift"; sourceTree = "<group>"; };
++		D63A4A5500EBA6CE5C264FBA = { isa = PBXBuildFile; fileRef = 8C1765B59E344CCAAB5C8FA7; };
++		B2B67B5CE799612B2597D15A = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/MealEstimateTests.swift"; sourceTree = "<group>"; };
++		C352F44C3D97187CFF599EC9 = { isa = PBXBuildFile; fileRef = B2B67B5CE799612B2597D15A; };
++		21AC6431F842ABFD39044F28 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/RecompCoreTests.swift"; sourceTree = "<group>"; };
++		AAA70A5573D101F5A1D8B236 = { isa = PBXBuildFile; fileRef = 21AC6431F842ABFD39044F28; };
++		C8E5C042B21F7B41BB07CCC1 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/RecompCoreTests/ScaleTests.swift"; sourceTree = "<group>"; };
++		EE18A7C1EEB985EBFB967840 = { isa = PBXBuildFile; fileRef = C8E5C042B21F7B41BB07CCC1; };
++		D0B46E9E6F5289B6F5F418CD = { isa = PBXBuildFile; fileRef = 89F3B4933F071B5F9C000968; };
++		2A936C02B197A06EB174B139 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TestSupport/NativeTests/BackupCryptoTests.swift"; sourceTree = "<group>"; };
++		EE7FE5D36E84B8656B5A96AE = { isa = PBXBuildFile; fileRef = 2A936C02B197A06EB174B139; };
++		38A64AF91BD24EA361A2BA35 = { isa = PBXFileReference; lastKnownFileType = file; path = "TestSupport/Fixtures/backup-reference.recompbackup"; sourceTree = "<group>"; };
++		8653DAF497432578BD83B9BB = { isa = PBXBuildFile; fileRef = 38A64AF91BD24EA361A2BA35; };
++		4F055D9D6F45D3CCAFD7C8BA = { isa = PBXGroup; children = (82CCDBFAA8DA47E86E9035E5, 69DE4EB5776F3097E692B2CE, 8C51A2E254F86D013516BBCD, 251319FA519115DA68B6877C, 2FE92BF8FBDCDD805D69B1C4, 3FCAAF22115ED1BDA3621414, 48C2928B26796813094ED4B6, C7314A972FE8A4B723AB2E27, 563C5DC70B48B5A4F61AF203, 3D7BD6352F42BFB2C9D0612C, B5BE04724B110A876807EBE9, 8C3E5D2036F7BAFA084C835E, 3A4F2CA7E918E846733DE804, 19365E0B1DD9A2884DAF8087, 3829805E2BF8689AF07D7354, 9B69E8ED9F6194EAF25D802D, 74818F768F57C636FC519884, 7C36A7065002F33F79879E24, 86DB79EF7D7E6EB42120BAB0, 712082543610CE2C9CECF4F5, 18E1D2953B1DAC8E340E6867, 46E0565851DD54BE51372A19, B13F9556C149737E3C642380, E2FE03BABF24FC5FF2B8E56C, 8C1765B59E344CCAAB5C8FA7, B2B67B5CE799612B2597D15A, 21AC6431F842ABFD39044F28, C8E5C042B21F7B41BB07CCC1, 89F3B4933F071B5F9C000968, 2A936C02B197A06EB174B139, 38A64AF91BD24EA361A2BA35, ); name = RecompNativeTests; sourceTree = "<group>"; };
++		5E2034BD238F58D488807DA8 = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RecompNativeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
++		B6D218286F18219213337307 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (25DAC66CFBB439B7974F3254, 49FE2FC4836A8B62B042D5B8, D2E908323F29B2629657B44B, 802D4942345F53B4206CF88F, CDAA2C5310E5AE933C5B514A, 71905884704F12E7901D8F47, 2CDD0E268C195DAB2B0C9F88, 54E2058E2013BD4D37A960C8, A82C4612F532424037ADD9CC, 84EE95E34FC51A8BEA6A88AA, 7C65DA42FDAECBBE1CB96C98, 6C8664121DCA8647010513AB, 69960AF313EC40C68B143C86, 9ACFAB585A4A04D3892F57E3, 848D598FC14ED0CE8A978264, B59357CC8088C84E2A911ECC, A0EABA3DA2082994156520F6, 10B62FFE6D9AC4EDC6086643, A09CC6007705EF1D4D0E39DE, 530C76374DC1E9501784775A, EEE9520D28A3BAD4218FBAE6, B3058EBFA8E1D98D26FF746E, D8E8A4C6094D4142CEAEDFEF, D7B25D851951285A6DC38CE5, D63A4A5500EBA6CE5C264FBA, C352F44C3D97187CFF599EC9, AAA70A5573D101F5A1D8B236, EE18A7C1EEB985EBFB967840, D0B46E9E6F5289B6F5F418CD, EE7FE5D36E84B8656B5A96AE, ); runOnlyForDeploymentPostprocessing = 0; };
++		B77319C1F721124D0EE12534 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (8653DAF497432578BD83B9BB, ); runOnlyForDeploymentPostprocessing = 0; };
++		FB4F28C5CBC2F9806471C500 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
++		1046609543954B07E0FB3764 = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; DEVELOPMENT_TEAM = ""; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.RecompNativeTests"; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = "YES"; TARGETED_DEVICE_FAMILY = "1"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; ENABLE_TESTING_SEARCH_PATHS = "YES"; SKIP_INSTALL = "YES"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/Frameworks @executable_path/Frameworks"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) RECOMP_NATIVE_TESTS"; }; name = Debug; };
++		04FE3A04098151B727112256 = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; DEVELOPMENT_TEAM = ""; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.RecompNativeTests"; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = "YES"; TARGETED_DEVICE_FAMILY = "1"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; ENABLE_TESTING_SEARCH_PATHS = "YES"; SKIP_INSTALL = "YES"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/Frameworks @executable_path/Frameworks"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) RECOMP_NATIVE_TESTS"; }; name = Release; };
++		75F82A274760B9C4A11D009A = { isa = XCConfigurationList; buildConfigurations = (1046609543954B07E0FB3764, 04FE3A04098151B727112256, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
++		2FF3E7564C10A5B8C248C27F = { isa = PBXNativeTarget; buildConfigurationList = 75F82A274760B9C4A11D009A; buildPhases = (B6D218286F18219213337307, B77319C1F721124D0EE12534, FB4F28C5CBC2F9806471C500, ); buildRules = (); dependencies = (); name = RecompNativeTests; productName = RecompNativeTests; productReference = 5E2034BD238F58D488807DA8; productType = "com.apple.product-type.bundle.unit-test"; };
++		0D66D0FAF94A162871D49238 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RecompUITests/RecompUITests.swift"; sourceTree = "<group>"; };
++		2DAFD00441F8F4D31427AF95 = { isa = PBXBuildFile; fileRef = 0D66D0FAF94A162871D49238; };
++		D43A902AE0D3BE0F642C3A5F = { isa = PBXGroup; children = (0D66D0FAF94A162871D49238, ); name = RecompUITests; sourceTree = "<group>"; };
++		A9DA8A74D200AD61138BFBFC = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RecompUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
++		5CF399335B08CECEC262D589 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (2DAFD00441F8F4D31427AF95, ); runOnlyForDeploymentPostprocessing = 0; };
++		AF4167CBD9898E349B7363D0 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
++		97FA7A3A03DB2703F9A16DF7 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
++		1237E1C4B35AAACDCA3A8C11 = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; DEVELOPMENT_TEAM = ""; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.RecompUITests"; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = "YES"; TARGETED_DEVICE_FAMILY = "1"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; ENABLE_TESTING_SEARCH_PATHS = "YES"; SKIP_INSTALL = "YES"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/Frameworks @executable_path/Frameworks"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) RECOMP_NATIVE_TESTS"; TEST_TARGET_NAME = "Recomp"; }; name = Debug; };
++		A08BBFFDD4795E86871C300E = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; DEVELOPMENT_TEAM = ""; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.RecompUITests"; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = "YES"; TARGETED_DEVICE_FAMILY = "1"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; ENABLE_TESTING_SEARCH_PATHS = "YES"; SKIP_INSTALL = "YES"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/Frameworks @executable_path/Frameworks"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) RECOMP_NATIVE_TESTS"; TEST_TARGET_NAME = "Recomp"; }; name = Release; };
++		110CA165AFEE4C7643D24650 = { isa = XCConfigurationList; buildConfigurations = (1237E1C4B35AAACDCA3A8C11, A08BBFFDD4795E86871C300E, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
++		F63E0DC8FADDCA4AA4E4B028 = { isa = PBXContainerItemProxy; containerPortal = 98F54143AB4E86B28C3AFEE0; proxyType = 1; remoteGlobalIDString = 0E8A3AD980EC179856012B7E; remoteInfo = Recomp; };
++		7CB6C33278B6D968AA2F38D4 = { isa = PBXTargetDependency; target = 0E8A3AD980EC179856012B7E; targetProxy = F63E0DC8FADDCA4AA4E4B028; };
++		C68D12B9BA863456F3B3BD32 = { isa = PBXNativeTarget; buildConfigurationList = 110CA165AFEE4C7643D24650; buildPhases = (5CF399335B08CECEC262D589, AF4167CBD9898E349B7363D0, 97FA7A3A03DB2703F9A16DF7, ); buildRules = (); dependencies = (7CB6C33278B6D968AA2F38D4, ); name = RecompUITests; productName = RecompUITests; productReference = A9DA8A74D200AD61138BFBFC; productType = "com.apple.product-type.bundle.ui-testing"; };
+ 		BCE16DD0260827ECF338C787 = { isa = PBXGroup; children = (82CCDBFAA8DA47E86E9035E5, 69DE4EB5776F3097E692B2CE, 8C51A2E254F86D013516BBCD, 251319FA519115DA68B6877C, 2FE92BF8FBDCDD805D69B1C4, 3FCAAF22115ED1BDA3621414, 48C2928B26796813094ED4B6, C7314A972FE8A4B723AB2E27, 563C5DC70B48B5A4F61AF203, 3D7BD6352F42BFB2C9D0612C, B5BE04724B110A876807EBE9, 8C3E5D2036F7BAFA084C835E, 3A4F2CA7E918E846733DE804, 19365E0B1DD9A2884DAF8087, 3829805E2BF8689AF07D7354, 9B69E8ED9F6194EAF25D802D, 74818F768F57C636FC519884, 7C36A7065002F33F79879E24, 86DB79EF7D7E6EB42120BAB0, 386816FFB1BF2466E2E25184, 0D606FBC4B7050B2149AA465, C2680A8754520772704E2175, 89F3B4933F071B5F9C000968, F3AB93D06A195E8339148120, A110CFDA2B5B5ABF083C579D, DB118839283F3F0359F96A50, E800DA2D0AC9ED2931B34BD8, 97273FE32438A6854FCF63B4, 562AE53DDC290AAB6B92FAE2, A96E2EADC28A44A5F7B7DCA9, A20259DF7575611B2331AE8F, 2E529D38541DBCD2CEDC05BE, BFF321160A4F85D287045E6F, 889D0C2190442BA857C536D6, 155C73F00D45AB3DFCF18146, 9A322AA1843ABC2B3FAB3193, 508BE8F2A9842A091D90387D, 45053E0CED8EC0746F0C59D6, 8DA433730C36B3C0AE333807, 1F99DDBAC4E3BD5161732930, DCEAE2CE4B5A262545654FB7, BBAD197054B8D24B36E512A3, 9A29190E8C35671184C86BAC, A7CEAD2E38161D0766471803, C6652CB9712144AFAE9FB007, 1DBE2AB4C06C6720363FC4D2, 2D413F1FC84EB1E01C7E0AD4, 22C59CF8E862373F47114922, 905BC5A8971C2BF00C4CF337, ); name = Sources; sourceTree = "<group>"; };
+ 		0189424A5A60FED329FA868E = { isa = PBXGroup; children = (913E2720614DE30755924155, FB1D94E8F30851A1B0C2027D, D75305C70232D72391B86EC2, B30CEA7A515C540D806F4373, ); name = Resources; sourceTree = "<group>"; };
+ 		7561BFB015D8F536760CB671 = { isa = PBXGroup; children = (CA0FCFB5BC7F0402AE433375, ); name = Frameworks; sourceTree = "<group>"; };
+-		FBDC4F23F93125BBEEAE800C = { isa = PBXGroup; children = (38A007151ABE87CC01A5B6E9, F231F6FE549E641636571AA6, ); name = Products; sourceTree = "<group>"; };
+-		E50290A24C49A459B43487C5 = { isa = PBXGroup; children = (BCE16DD0260827ECF338C787, 0189424A5A60FED329FA868E, C92DD1663907A79AA467B5F8, 7561BFB015D8F536760CB671, FBDC4F23F93125BBEEAE800C, ); sourceTree = "<group>"; };
++		FBDC4F23F93125BBEEAE800C = { isa = PBXGroup; children = (38A007151ABE87CC01A5B6E9, F231F6FE549E641636571AA6, 5E2034BD238F58D488807DA8, A9DA8A74D200AD61138BFBFC, ); name = Products; sourceTree = "<group>"; };
++		E50290A24C49A459B43487C5 = { isa = PBXGroup; children = (BCE16DD0260827ECF338C787, 0189424A5A60FED329FA868E, C92DD1663907A79AA467B5F8, 7561BFB015D8F536760CB671, FBDC4F23F93125BBEEAE800C, 4F055D9D6F45D3CCAFD7C8BA, D43A902AE0D3BE0F642C3A5F, ); sourceTree = "<group>"; };
+ 		019DCF79831E783B1D7D6308 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (43BDD944EA6D13FBD64EF7DD, 8D12DC21832CFD756007D394, C6B472084A035B15A7BF72AE, E807E9D2A2371FD3784F86C8, 9999E74961FFADDAB84A5A0E, 7F5DA4E4835B0CCA4E198982, CFDBC282B2F81288E22B8578, 63A2B2F79AD092139A0DD65B, 37B40375441489CB7302952F, 95E88FA334F480C4264702B6, 24553915EF9E1361D6BF19E2, 5EA854AC81B7387A1A416075, 75CFCE48D05F5F3ECD5A47D9, 74114337A8FE7B6DEF33A6E9, A240A2302A7D671862A8251D, F8C2E3D4617C2109F615FB19, 8EBF33DA70068C7A768E0B96, F12FE45E97D8773BD4CAB59C, C7045E2D0E3AA702F83F8A7F, 623D288D9FAC51DDA18CF322, A43A17ECA1C317613536753D, A3D68C3014657D2B9A09636F, EF6D90A198A84F61BE2CEB96, FC17279B497E1C18E7CC0B3B, 5422D90B62543555FCC18B13, 578C850419E4CEF565E08B02, 5AD769C2C21C1D69A6D57918, C03A4753E5DB8A6E6EF81E83, 72EBB06073923C2746771ED7, 3EC1B78CB59EAF0B75DDE810, CE6426EC6DF18CD27D2EDC6C, 497B67F6CDBCD8020A61C980, 655CA1817B8A5DED50F85D6F, 07B733169BAF19759B81EC6A, 2DD9F30DCD008F1878983DF9, 2780A4C9D69B50889461EACA, 7D6BD293DDDD31BAFD2C539E, 92CD3A31565C4B2E935EC673, 92EFCE0650CC3D353977E4D8, 6BC6674DD1B1614B5D03BAAB, 72740A6B2CD4EF51E861187B, C26FC12B25AA08FA5DC035C4, 4703CC0D14CD2286151FCC21, D2828D7167D3AEC32873155F, 1FE8E203F811F99E6749D111, 04DE9B66F1B502B0BC40DA95, 4445AE446B53FFEB6AC5E397, 17841566B76884B13B8CC7FD, 0DC38A8C0EA43DA1F2952B1D, ); runOnlyForDeploymentPostprocessing = 0; };
+ 		8265F0E5A96A840158B6B41F = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (22BB158855858336A0A1FB5B, FE326B1CC7F385ADE18CD4E0, ); runOnlyForDeploymentPostprocessing = 0; };
+ 		40E35EA1706603A2872CA65B = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (525101977742B7BB1F137CC4, ); runOnlyForDeploymentPostprocessing = 0; };
+ 		9B02B6EDC3ACD0D0A45EB8D7 = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = "NO"; CLANG_ENABLE_MODULES = "YES"; CLANG_ENABLE_OBJC_ARC = "YES"; CLANG_WARN_DOCUMENTATION_COMMENTS = "YES"; GCC_C_LANGUAGE_STANDARD = "gnu17"; IPHONEOS_DEPLOYMENT_TARGET = "17.0"; SDKROOT = "iphoneos"; SWIFT_VERSION = "5.0"; SWIFT_STRICT_CONCURRENCY = "minimal"; DEBUG_INFORMATION_FORMAT = "dwarf"; ENABLE_TESTABILITY = "YES"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; GCC_OPTIMIZATION_LEVEL = "0"; ONLY_ACTIVE_ARCH = "YES"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG"; }; name = Debug; };
+-		A0D76D2121E95BDABD0D281A = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon"; ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = "AccentColor"; CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "Recomp/Recomp.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "8"; MARKETING_VERSION = "1.7"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "Recomp/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; }; name = Debug; };
+-		B403E7DC13C51A2689F2EB2B = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "RecompWidget/RecompWidget.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "8"; MARKETING_VERSION = "1.7"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "RecompWidget/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.widget"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; APPLICATION_EXTENSION_API_ONLY = "YES"; SKIP_INSTALL = "YES"; }; name = Debug; };
++		A0D76D2121E95BDABD0D281A = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon"; ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = "AccentColor"; CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "Recomp/Recomp.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "9"; MARKETING_VERSION = "1.7.1"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "Recomp/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; }; name = Debug; };
++		B403E7DC13C51A2689F2EB2B = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "RecompWidget/RecompWidget.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "9"; MARKETING_VERSION = "1.7.1"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "RecompWidget/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.widget"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; APPLICATION_EXTENSION_API_ONLY = "YES"; SKIP_INSTALL = "YES"; }; name = Debug; };
+ 		D55A472A54FF4167B59A18AC = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = "NO"; CLANG_ENABLE_MODULES = "YES"; CLANG_ENABLE_OBJC_ARC = "YES"; CLANG_WARN_DOCUMENTATION_COMMENTS = "YES"; GCC_C_LANGUAGE_STANDARD = "gnu17"; IPHONEOS_DEPLOYMENT_TARGET = "17.0"; SDKROOT = "iphoneos"; SWIFT_VERSION = "5.0"; SWIFT_STRICT_CONCURRENCY = "minimal"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_TESTABILITY = "NO"; SWIFT_OPTIMIZATION_LEVEL = "-O"; GCC_OPTIMIZATION_LEVEL = "s"; ONLY_ACTIVE_ARCH = "NO"; }; name = Release; };
+-		EBFFE960C1756AF59B02152E = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon"; ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = "AccentColor"; CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "Recomp/Recomp.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "8"; MARKETING_VERSION = "1.7"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "Recomp/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; }; name = Release; };
+-		A3D0C6E0EC31209A8E0C855E = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "RecompWidget/RecompWidget.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "8"; MARKETING_VERSION = "1.7"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "RecompWidget/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.widget"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; APPLICATION_EXTENSION_API_ONLY = "YES"; SKIP_INSTALL = "YES"; }; name = Release; };
++		EBFFE960C1756AF59B02152E = { isa = XCBuildConfiguration; buildSettings = { ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon"; ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = "AccentColor"; CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "Recomp/Recomp.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "9"; MARKETING_VERSION = "1.7.1"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "Recomp/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; }; name = Release; };
++		A3D0C6E0EC31209A8E0C855E = { isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = "Automatic"; CODE_SIGN_ENTITLEMENTS = "RecompWidget/RecompWidget.entitlements"; DEVELOPMENT_TEAM = ""; CURRENT_PROJECT_VERSION = "9"; MARKETING_VERSION = "1.7.1"; RECOMP_APP_GROUP = "group.com.example.recomp"; GENERATE_INFOPLIST_FILE = "NO"; INFOPLIST_FILE = "RecompWidget/Info.plist"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "com.example.recomp.widget"; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = "NO"; TARGETED_DEVICE_FAMILY = "1"; ENABLE_PREVIEWS = "YES"; SWIFT_EMIT_LOC_STRINGS = "YES"; APPLICATION_EXTENSION_API_ONLY = "YES"; SKIP_INSTALL = "YES"; }; name = Release; };
+ 		54C34156A8D1870FEB43616E = { isa = XCConfigurationList; buildConfigurations = (B403E7DC13C51A2689F2EB2B, A3D0C6E0EC31209A8E0C855E, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+ 		704A160D8849979DE00DDB64 = { isa = PBXNativeTarget; buildConfigurationList = 54C34156A8D1870FEB43616E; buildPhases = (8304A4FBFC55A129B618AD1F, 3258EA8BA398DD3BB72589A1, 4BDD54E23141BA009BC5597B, ); buildRules = (); dependencies = (); name = RecompWidget; productName = RecompWidget; productReference = F231F6FE549E641636571AA6; productType = "com.apple.product-type.app-extension"; };
+ 		41A2CC2D5321B7BB2E956CA5 = { isa = XCConfigurationList; buildConfigurations = (9B02B6EDC3ACD0D0A45EB8D7, D55A472A54FF4167B59A18AC, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+ 		B483F6EB73610DE752E457A0 = { isa = XCConfigurationList; buildConfigurations = (A0D76D2121E95BDABD0D281A, EBFFE960C1756AF59B02152E, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+ 		0E8A3AD980EC179856012B7E = { isa = PBXNativeTarget; buildConfigurationList = B483F6EB73610DE752E457A0; buildPhases = (019DCF79831E783B1D7D6308, 40E35EA1706603A2872CA65B, 8265F0E5A96A840158B6B41F, 01138FB9EB584A0E17CB6033, ); buildRules = (); dependencies = (4DA75641BEA61A776F463463, ); name = Recomp; productName = Recomp; productReference = 38A007151ABE87CC01A5B6E9; productType = "com.apple.product-type.application"; };
+-		98F54143AB4E86B28C3AFEE0 = { isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = { 0E8A3AD980EC179856012B7E = { CreatedOnToolsVersion = 16.0; SystemCapabilities = { com.apple.HealthKit = { enabled = 1; }; com.apple.ApplicationGroups.iOS = { enabled = 1; }; }; }; }; }; buildConfigurationList = 41A2CC2D5321B7BB2E956CA5; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = E50290A24C49A459B43487C5; productRefGroup = FBDC4F23F93125BBEEAE800C; projectDirPath = ""; projectRoot = ""; targets = (0E8A3AD980EC179856012B7E, 704A160D8849979DE00DDB64, ); };
++		98F54143AB4E86B28C3AFEE0 = { isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = { 0E8A3AD980EC179856012B7E = { CreatedOnToolsVersion = 16.0; SystemCapabilities = { com.apple.HealthKit = { enabled = 1; }; com.apple.ApplicationGroups.iOS = { enabled = 1; }; }; }; }; }; buildConfigurationList = 41A2CC2D5321B7BB2E956CA5; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = E50290A24C49A459B43487C5; productRefGroup = FBDC4F23F93125BBEEAE800C; projectDirPath = ""; projectRoot = ""; targets = (0E8A3AD980EC179856012B7E, 704A160D8849979DE00DDB64, 2FF3E7564C10A5B8C248C27F, C68D12B9BA863456F3B3BD32, ); };
+ 	};
+ 	rootObject = 98F54143AB4E86B28C3AFEE0;
+ }
+diff --git a/Recomp.xcodeproj/xcshareddata/xcschemes/Recomp.xcscheme b/Recomp.xcodeproj/xcshareddata/xcschemes/Recomp.xcscheme
+index 9d1663f..a353b36 100644
+--- a/Recomp.xcodeproj/xcshareddata/xcschemes/Recomp.xcscheme
++++ b/Recomp.xcodeproj/xcshareddata/xcschemes/Recomp.xcscheme
+@@ -2,8 +2,9 @@
+ <Scheme LastUpgradeVersion="1600" version="1.3">
+   <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries>
+     <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="0E8A3AD980EC179856012B7E" BuildableName="Recomp.app" BlueprintName="Recomp" ReferencedContainer="container:Recomp.xcodeproj" /></BuildActionEntry>
++    <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="2FF3E7564C10A5B8C248C27F" BuildableName="RecompNativeTests.xctest" BlueprintName="RecompNativeTests" ReferencedContainer="container:Recomp.xcodeproj" /></BuildActionEntry><BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="C68D12B9BA863456F3B3BD32" BuildableName="RecompUITests.xctest" BlueprintName="RecompUITests" ReferencedContainer="container:Recomp.xcodeproj" /></BuildActionEntry>
+   </BuildActionEntries></BuildAction>
+-  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables /></TestAction>
++  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="2FF3E7564C10A5B8C248C27F" BuildableName="RecompNativeTests.xctest" BlueprintName="RecompNativeTests" ReferencedContainer="container:Recomp.xcodeproj" /></TestableReference><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="C68D12B9BA863456F3B3BD32" BuildableName="RecompUITests.xctest" BlueprintName="RecompUITests" ReferencedContainer="container:Recomp.xcodeproj" /></TestableReference></Testables></TestAction>
+   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="0E8A3AD980EC179856012B7E" BuildableName="Recomp.app" BlueprintName="Recomp" ReferencedContainer="container:Recomp.xcodeproj" /></BuildableProductRunnable></LaunchAction>
+   <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="0E8A3AD980EC179856012B7E" BuildableName="Recomp.app" BlueprintName="Recomp" ReferencedContainer="container:Recomp.xcodeproj" /></BuildableProductRunnable></ProfileAction>
+   <AnalyzeAction buildConfiguration="Debug" />
+diff --git a/Recomp/Core/AdaptiveModels.swift b/Recomp/Core/AdaptiveModels.swift
+index 515365f..bb24dc3 100644
+--- a/Recomp/Core/AdaptiveModels.swift
++++ b/Recomp/Core/AdaptiveModels.swift
+@@ -54,8 +54,11 @@ struct DayReview: Identifiable, Codable, Equatable, Sendable {
+     var note = ""
+     var id: String { timeZoneID + ":" + dayKey }
+     var isValid: Bool {
+-        dayKey.count == 10 && TimeZone(identifier: timeZoneID) != nil && total.isValid && total.calories > 0 &&
+-        estimatedCalorieFraction.isFinite && (0...1).contains(estimatedCalorieFraction) && note.count <= 1000
++        guard dayKey.count == 10, let zone = TimeZone(identifier: timeZoneID), confirmedAt.timeIntervalSince1970.isFinite,
++              total.isValid, total.calories > 0, estimatedCalorieFraction.isFinite,
++              (0...1).contains(estimatedCalorieFraction), note.count <= 1000 else { return false }
++        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
++        return date(calendar: calendar) != nil
+     }
+     static func key(_ date: Date, calendar: Calendar = .current) -> String {
+         let c = calendar.dateComponents([.year, .month, .day], from: date)
+diff --git a/Recomp/Core/BodyMeasurements.swift b/Recomp/Core/BodyMeasurements.swift
+index 7c631c3..4692b1b 100644
+--- a/Recomp/Core/BodyMeasurements.swift
++++ b/Recomp/Core/BodyMeasurements.swift
+@@ -60,7 +60,7 @@ struct BodyMeasurement: Identifiable, Codable, Equatable, Sendable {
+     var scaleLocationID: UUID? // Optional; old records and imports are never auto-tagged.
+     var isValid: Bool {
+         metric.accepts(value) && date.timeIntervalSince1970.isFinite && method.count <= 100 &&
+-        note.count <= 1000 && version > 0 && exportedVersion >= 0
++        note.count <= 1000 && version > 0 && version < Int.max && exportedVersion >= 0 && exportedVersion <= version
+     }
+     var needsExport: Bool { metric.healthSupported && exportedVersion < version }
+ }
+diff --git a/Recomp/Core/MealEstimate.swift b/Recomp/Core/MealEstimate.swift
+index b3b566b..1c2e1e4 100644
+--- a/Recomp/Core/MealEstimate.swift
++++ b/Recomp/Core/MealEstimate.swift
+@@ -58,6 +58,15 @@ struct EstimateDraft: Codable, Equatable, Sendable {
+         excludedFoods.allSatisfy { $0.count <= 160 } &&
+         lockedItemIDs.isSubset(of: Set(estimate.items.map(\.id)))
+     }
++    mutating func clearPhotoReferences() {
++        estimate.items = estimate.items.map { item in
++            var item = item
++            item.evidence = item.evidence?.map { evidence in
++                var evidence = evidence; evidence.photoNumber = nil; return evidence
++            }
++            return item
++        }
++    }
+     mutating func edit(_ food: EstimatedFood, locked: Bool = true) {
+         guard food.isValid else { return }
+         if let index = estimate.items.firstIndex(where: { $0.id == food.id }) {
+diff --git a/Recomp/Core/Models.swift b/Recomp/Core/Models.swift
+index a7a360c..b51707d 100644
+--- a/Recomp/Core/Models.swift
++++ b/Recomp/Core/Models.swift
+@@ -100,7 +100,9 @@ struct FoodEntry: Identifiable, Codable, Equatable, Sendable {
+     }
+     var isValid: Bool {
+         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 200 &&
+-        note.count <= 2000 && nutrition.containsFood && version > 0 &&
++        note.count <= 2000 && nutrition.containsFood && date.timeIntervalSince1970.isFinite &&
++        version > 0 && version < Int.max &&
++        exportedVersions.allSatisfy { Nutrient(rawValue: $0.key) != nil && $0.value > 0 && $0.value <= version } &&
+         (photos == nil || (photos!.count <= MealPhoto.maximumCount && photos!.allSatisfy(\.isValid) && Set(photos!.map(\.id)).count == photos!.count)) &&
+         (aiDraft == nil || (aiDraft!.isValid && aiDraft!.estimate.total == nutrition))
+     }
+@@ -170,7 +172,8 @@ struct AppState: Codable, Equatable, Sendable {
+         targetRevisions.allSatisfy { $0.before.isValid && $0.after.isValid && $0.after.calories > 0 } &&
+         maintenanceHistory.allSatisfy { $0.calories.isFinite && $0.lower.isFinite && $0.upper.isFinite && $0.lower <= $0.calories && $0.calories <= $0.upper } && targets.isValid && targets.calories > 0 &&
+         entries.allSatisfy(\.isValid) && Set(entries.map(\.id)).count == entries.count &&
+-        templates.allSatisfy { !$0.name.isEmpty && $0.nutrition.containsFood } &&
++        templates.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 200 && $0.note.count <= 2000 && $0.nutrition.containsFood } &&
++        Set(templates.map(\.id)).count == templates.count &&
+         Set(deletions.map(\.id)).count == deletions.count &&
+         Set(entries.map(\.id)).isDisjoint(with: Set(deletions.map(\.id)))
+     }
+diff --git a/Recomp/PrivacyInfo.xcprivacy b/Recomp/PrivacyInfo.xcprivacy
+index 762de6f..3239aed 100644
+--- a/Recomp/PrivacyInfo.xcprivacy
++++ b/Recomp/PrivacyInfo.xcprivacy
+@@ -12,6 +12,15 @@
+ 				<string>CA92.1</string>
+ 			</array>
+ 		</dict>
++		<dict>
++			<key>NSPrivacyAccessedAPIType</key>
++			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
++			<key>NSPrivacyAccessedAPITypeReasons</key>
++			<array>
++				<string>C617.1</string>
++				<string>3B52.1</string>
++			</array>
++		</dict>
+ 	</array>
+ 	<key>NSPrivacyCollectedDataTypes</key>
+ 	<array>
+diff --git a/Recomp/RecompApp.swift b/Recomp/RecompApp.swift
+index 7949a4a..0ab1c45 100644
+--- a/Recomp/RecompApp.swift
++++ b/Recomp/RecompApp.swift
+@@ -3,9 +3,23 @@ import SwiftUI
+ @main
+ @MainActor
+ struct RecompApp: App {
+-    @StateObject private var diary = DiaryStore()
++    @StateObject private var diary: DiaryStore
+     @StateObject private var activity = ActivityModel()
+     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
++    init() {
++        #if DEBUG && targetEnvironment(simulator)
++        if ProcessInfo.processInfo.arguments.contains("--recomp-ui-test") {
++            let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
++                .appendingPathComponent("Recomp-UI-Test-Only", isDirectory: true)
++            if ProcessInfo.processInfo.arguments.contains("--reset-test-diary") {
++                try? FileManager.default.removeItem(at: root)
++            }
++            _diary = StateObject(wrappedValue: DiaryStore(fileURL: root.appendingPathComponent("diary.json")))
++            return
++        }
++        #endif
++        _diary = StateObject(wrappedValue: DiaryStore())
++    }
+     var body: some Scene {
+         WindowGroup {
+             RootView()
+diff --git a/Recomp/Services/DiaryStore.swift b/Recomp/Services/DiaryStore.swift
+index 5106892..9ff5a1d 100644
+--- a/Recomp/Services/DiaryStore.swift
++++ b/Recomp/Services/DiaryStore.swift
+@@ -116,6 +116,11 @@ final class DiaryStore: ObservableObject {
+         }
+     }
+     func selectDay(_ date: Date) {
++        // Invalidate in-flight reads synchronously, not when the queued refresh happens
++        // to start. A response for the previous date must not certify this date complete.
++        refreshGeneration += 1
++        isRefreshing = false
++        readWarning = ""
+         selectedDay = Calendar.current.startOfDay(for: min(date, Date()))
+         healthSamples = []
+         lastRefreshed = nil
+@@ -145,7 +150,9 @@ final class DiaryStore: ObservableObject {
+     }
+     @discardableResult
+     func saveEntry(_ proposed: FoodEntry, makeTemplate: Bool) -> Bool {
+-        guard proposed.isValid else { errorMessage = "Enter a name and valid, nonnegative nutrition values."; return false }
++        guard proposed.isValid, proposed.date <= Date() else {
++            errorMessage = "Enter a name, valid nutrition values and a date that is not in the future. Use Check food for food you have not eaten."; return false
++        }
+         let retainedBytes = state.entries.filter { $0.id != proposed.id }.reduce(0) { sum, entry in
+             sum + (entry.photos ?? []).reduce(0) { $0 + $1.jpeg.count }
+         } + (proposed.photos ?? []).reduce(0) { $0 + $1.jpeg.count }
+@@ -175,7 +182,10 @@ final class DiaryStore: ObservableObject {
+                 } else { next.templates.append(template) }
+             }
+         }
+-        if success && state.healthEnabled { Task { await synchronize() } }
++        if success {
++            rememberMaintenance()
++            if state.healthEnabled { Task { await synchronize() } }
++        }
+         return success
+     }
+     func removeEntry(_ id: UUID) {
+@@ -186,7 +196,10 @@ final class DiaryStore: ObservableObject {
+             // Queue even if no receipt was persisted: a Health save may have succeeded before a crash.
+             if !next.deletions.contains(where: { $0.id == id }) { next.deletions.append(DeletionTask(id: id)) }
+         }
+-        if success && state.healthEnabled { Task { await synchronize() } }
++        if success {
++            rememberMaintenance()
++            if state.healthEnabled { Task { await synchronize() } }
++        }
+     }
+     func removeTemplate(_ id: UUID) { _ = commit { $0.templates.removeAll { $0.id == id } } }
+     @discardableResult
+@@ -208,7 +221,7 @@ final class DiaryStore: ObservableObject {
+     }
+     func pauseHealth() {
+         // Stop future reads/writes but leave already-exported data in Apple Health.
+-        _ = commit { $0.healthEnabled = false; $0.bodyHealthEnabled = false; $0.dxaHealthEnabled = false }
++        guard commit({ $0.healthEnabled = false; $0.bodyHealthEnabled = false; $0.dxaHealthEnabled = false }) else { return }
+         refreshGeneration += 1
+         isRefreshing = false
+         healthSamples = []; healthBodySamples = []; lastRefreshed = nil
+@@ -224,7 +237,7 @@ final class DiaryStore: ObservableObject {
+         bodyWritable = health.writableBodyMetrics
+         let nutrition = state.healthEnabled ? await health.readNutrition(day: day) : NutritionReadResult()
+         let body = await health.readBody(includeComposition: state.bodyHealthEnabled)
+-        guard generation == refreshGeneration, state.healthEnabled || state.bodyHealthEnabled else {
++        guard generation == refreshGeneration, selectedDay == day, state.healthEnabled || state.bodyHealthEnabled else {
+             if generation == refreshGeneration { isRefreshing = false }
+             return
+         }
+@@ -265,7 +278,8 @@ final class DiaryStore: ObservableObject {
+             for entry in snapshot {
+                 for nutrient in SyncIdentity.pendingNutrients(for: entry) {
+                     guard state.healthEnabled else { break }
+-                    guard writable.contains(nutrient), state.entries.contains(where: { $0.id == entry.id }) else { continue }
++                    guard writable.contains(nutrient), let current = state.entries.first(where: { $0.id == entry.id }) else { continue }
++                    guard current.version == entry.version else { syncAgain = true; break }
+                     do {
+                         try await health.upsert(entry, nutrient: nutrient)
+                         // If edited while awaiting HealthKit, retain the older receipt; the new version stays pending.
+@@ -291,7 +305,8 @@ final class DiaryStore: ObservableObject {
+                 }
+                 for record in state.measurements.filter(\.needsExport) {
+                     guard state.bodyHealthEnabled else { break }
+-                    guard bodyWritable.contains(record.metric), state.measurements.contains(where: { $0.id == record.id }) else { continue }
++                    guard bodyWritable.contains(record.metric), let current = state.measurements.first(where: { $0.id == record.id }) else { continue }
++                    guard current.version == record.version else { syncAgain = true; continue }
+                     do {
+                         try await health.upsertBody(record)
+                         guard commit({ next in
+@@ -341,9 +356,11 @@ final class DiaryStore: ObservableObject {
+                     }
+                 }
+             }
++            // A save may arrive while these reads suspend. Drain that request too;
++            // previously syncAgain was set here but the loop had already finished.
++            if state.healthEnabled || state.bodyHealthEnabled { await refreshHealth() }
+         } while syncAgain && (state.healthEnabled || state.bodyHealthEnabled || state.dxaHealthEnabled)
+         syncMessage = failures.sorted().joined(separator: "\n")
+-        if state.healthEnabled || state.bodyHealthEnabled { await refreshHealth() }
+     }
+ 
+     // DXA stays outside scale analysis. Only separately approved Health links are updated.
+@@ -538,7 +555,7 @@ final class DiaryStore: ObservableObject {
+         } catch { errorMessage = error.localizedDescription }
+     }
+     func pauseBodyHealth() {
+-        _ = commit { $0.bodyHealthEnabled = false }
++        guard commit({ $0.bodyHealthEnabled = false }) else { return }
+         healthBodySamples = state.healthEnabled ? healthBodySamples.filter { $0.metric == .weight } : []
+         refreshGeneration += 1; isRefreshing = false
+         rememberMaintenance()
+diff --git a/Recomp/Services/MealEstimatorModel.swift b/Recomp/Services/MealEstimatorModel.swift
+index 64ef0a5..7892a4b 100644
+--- a/Recomp/Services/MealEstimatorModel.swift
++++ b/Recomp/Services/MealEstimatorModel.swift
+@@ -20,6 +20,8 @@ final class MealEstimatorModel: ObservableObject {
+     private var requestTask: Task<Void, Never>?
+     private var requestGeneration = 0
+     private let entryID: UUID
++    private let initialDraft: EstimateDraft?
++    private static let photoReviewDetail = "Review the updated photo evidence without reapplying earlier corrections."
+     let original: FoodEntry?
+ 
+     init(date: Date, original: FoodEntry? = nil) {
+@@ -28,7 +30,20 @@ final class MealEstimatorModel: ObservableObject {
+         self.date = original?.date ?? date
+         self.meal = original?.meal ?? .suggested(at: date)
+         self.note = original?.note ?? ""
+-        self.draft = original?.aiDraft
++        // Editing aggregate macros intentionally clears an outdated ingredient breakdown.
++        // Retained photos must not then turn a corrected meal back into a blank AI estimate.
++        var startingDraft = original?.aiDraft
++        if startingDraft == nil, let original {
++            let item = EstimatedFood(id: original.id.uuidString + ".aggregate", name: String(original.name.prefix(160)),
++                portion: "Recorded meal total", nutrition: original.nutrition,
++                assumptions: ["These are the last saved totals, not a newly inferred ingredient breakdown."],
++                evidence: [FoodEvidence(kind: .details, detail: "Preserved from the saved meal. Unlock and explicitly request a breakdown to replace these totals.")])
++            let candidate = EstimateDraft(estimate: MealEstimate(title: String(original.name.prefix(160)), items: [item]),
++                context: original.name, lockedItemIDs: [item.id])
++            if candidate.isValid { startingDraft = candidate }
++        }
++        self.initialDraft = startingDraft
++        self.draft = startingDraft
+         self.description = original?.aiDraft?.context ?? original?.name ?? ""
+         self.photos = original?.photos ?? []
+         self.lastSubmittedPhotos = self.photos
+@@ -39,14 +54,18 @@ final class MealEstimatorModel: ObservableObject {
+     }
+     var canRequest: Bool {
+         guard !busy, photos.count <= MealPhoto.maximumCount, photos.allSatisfy(\.isValid), description.count <= 8000, clarification.count <= 2000 else { return false }
+-        if let draft { return (!clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photos != lastSubmittedPhotos) &&
+-            draft.context.count + clarification.count + 13 <= 8000 && draft.isValid }
++        if let draft {
++            let supplied = clarification.trimmingCharacters(in: .whitespacesAndNewlines)
++            let details = supplied.isEmpty ? Self.photoReviewDetail : supplied
++            return (!supplied.isEmpty || photos != lastSubmittedPhotos) &&
++                draft.context.count + details.count + 13 <= 8000 && draft.isValid
++        }
+         return !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !photos.isEmpty
+     }
+     var canSave: Bool { !busy && draft?.estimate.canLog == true && draft?.isValid == true && note.count <= 2000 }
+     var hasChanges: Bool {
+         if let original {
+-            return draft != original.aiDraft || (keepPhotos ? photos : []) != (original.photos ?? []) || !clarification.isEmpty ||
++            return draft != initialDraft || (keepPhotos ? photos : []) != (original.photos ?? []) || !clarification.isEmpty ||
+                 date != original.date || meal != original.meal || note != original.note || makeTemplate
+         }
+         return draft != nil || !photos.isEmpty || !description.isEmpty || !clarification.isEmpty
+@@ -54,9 +73,15 @@ final class MealEstimatorModel: ObservableObject {
+ 
+     func begin(configuration: EstimatorConfiguration) {
+         guard canRequest else { return }
+-        let snapshot = draft
++        let historySnapshot = draft
++        var snapshot = draft
++        if photos != lastSubmittedPhotos {
++            // Evidence numbering belongs to the old photo set. In particular, restored
++            // locked items must never acquire a reference to a different replacement image.
++            snapshot?.clearPhotoReferences()
++        }
+         var details = clarification.trimmingCharacters(in: .whitespacesAndNewlines)
+-        if snapshot != nil && details.isEmpty { details = "Review the updated photo evidence without reapplying earlier corrections." }
++        if snapshot != nil && details.isEmpty { details = Self.photoReviewDetail }
+         let submittedPhotos = photos
+         let context = snapshot?.context ?? description.trimmingCharacters(in: .whitespacesAndNewlines)
+         let input = EstimateRequest(description: context, clarification: snapshot == nil ? "" : details,
+@@ -73,7 +98,7 @@ final class MealEstimatorModel: ObservableObject {
+                 guard generation == requestGeneration else { return }
+                 if let snapshot {
+                     let next = try snapshot.refined(with: response, clarification: details)
+-                    pushHistory(snapshot); previousTotal = snapshot.estimate.total; draft = next
++                    pushHistory(historySnapshot ?? snapshot); previousTotal = snapshot.estimate.total; draft = next
+                 } else { draft = EstimateDraft(estimate: response, context: context) }
+                 lastSubmittedPhotos = submittedPhotos
+                 clarification = ""
+diff --git a/Recomp/Services/WidgetPublisher.swift b/Recomp/Services/WidgetPublisher.swift
+index 8c2fe2c..f48f2fd 100644
+--- a/Recomp/Services/WidgetPublisher.swift
++++ b/Recomp/Services/WidgetPublisher.swift
+@@ -11,6 +11,10 @@ enum WidgetPublisher {
+     }
+     @discardableResult
+     static func publish(_ state: AppState, now: Date = Date()) -> Bool {
++        #if DEBUG && targetEnvironment(simulator)
++        // UI smoke tests use an isolated diary and must not publish synthetic totals.
++        if ProcessInfo.processInfo.arguments.contains("--recomp-ui-test") { return false }
++        #endif
+         guard let directory = container else { return false }
+         var url = directory.appendingPathComponent(WidgetSnapshot.filename)
+         do {
+diff --git a/Recomp/Views/BodyScreen.swift b/Recomp/Views/BodyScreen.swift
+index 6002f6f..a04a233 100644
+--- a/Recomp/Views/BodyScreen.swift
++++ b/Recomp/Views/BodyScreen.swift
+@@ -194,6 +194,7 @@ struct MeasurementEditor: View {
+                             TextField("Optional", text: Binding(get: { inputs[metric] ?? "" }, set: { inputs[metric] = $0 }))
+                                 .fontDesign(.monospaced).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(maxWidth: 125)
+                                 .accessibilityLabel("\(metric.title), \(units.unit(for: metric))")
++                                .accessibilityIdentifier("measurement.\(metric.rawValue)")
+                             Text(units.unit(for: metric)).foregroundStyle(.secondary)
+                         }
+                     }
+diff --git a/Recomp/Views/Components.swift b/Recomp/Views/Components.swift
+index 78e25f6..58b1ea8 100644
+--- a/Recomp/Views/Components.swift
++++ b/Recomp/Views/Components.swift
+@@ -51,6 +51,7 @@ struct NutritionFields: View {
+                     .focused($focused, equals: nutrient)
+                     .frame(maxWidth: 110)
+                     .accessibilityLabel("\(nutrient.title), \(nutrient.unit)")
++                    .accessibilityIdentifier("nutrition.\(nutrient.rawValue)")
+                 Text(nutrient.unit).foregroundStyle(.secondary).frame(width: 32, alignment: .trailing)
+             }
+         }
+diff --git a/Recomp/Views/FoodEditor.swift b/Recomp/Views/FoodEditor.swift
+index 03768e0..d0890e4 100644
+--- a/Recomp/Views/FoodEditor.swift
++++ b/Recomp/Views/FoodEditor.swift
+@@ -36,7 +36,7 @@ struct FoodEditor: View {
+         NavigationStack {
+             Form {
+                 Section("Food") {
+-                    TextField("Food or meal name", text: $name)
++                    TextField("Food or meal name", text: $name).accessibilityIdentifier("food.name")
+                     Picker("Meal", selection: $meal) { ForEach(MealKind.allCases) { Text($0.rawValue).tag($0) } }
+                     DatePicker("When", selection: $date, in: ...Date(), displayedComponents: [.date, .hourAndMinute])
+                 }
+@@ -81,7 +81,7 @@ struct FoodEditor: View {
+             .navigationBarTitleDisplayMode(.inline)
+             .toolbar {
+                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+-                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.fontWeight(.semibold).disabled(!valid) }
++                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.accessibilityIdentifier("food.save").fontWeight(.semibold).disabled(!valid) }
+             }
+             .sheet(item: $refineRequest, onDismiss: {
+                 if refinementSaved { dismiss() }
+diff --git a/Recomp/Views/RootView.swift b/Recomp/Views/RootView.swift
+index b652f9c..e546eec 100644
+--- a/Recomp/Views/RootView.swift
++++ b/Recomp/Views/RootView.swift
+@@ -87,7 +87,7 @@ struct TodayView: View {
+                     Button { showCheck = true } label: {
+                         Label("Check food · without logging", systemImage: "magnifyingglass")
+                             .font(.subheadline).frame(minHeight: 44)
+-                    }.disabled(diary.loadFailure != nil)
++                    }.disabled(diary.loadFailure != nil).accessibilityIdentifier("food.check")
+                     foodLog
+                     if !diary.state.templates.isEmpty { quickAdd }
+                     DayCompletionCard()
+@@ -143,7 +143,7 @@ struct TodayView: View {
+         return layout {
+             Button { newEntry() } label: {
+                 Label("Log food", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 28)
+-            }.instrumentPrimary()
++            }.instrumentPrimary().accessibilityIdentifier("food.log")
+             Button { showEstimator = true } label: {
+                 Label("Estimate", systemImage: "camera").frame(maxWidth: .infinity, minHeight: 28)
+             }.buttonStyle(.bordered).buttonBorderShape(.roundedRectangle(radius: 8)).controlSize(.large)
+@@ -197,6 +197,7 @@ struct TodayView: View {
+                                     FoodLedgerRow(entry: entry, status: entryStatus(entry))
+                                 }.buttonStyle(.plain)
+                                     .accessibilityHint("Edit this meal")
++                                    .accessibilityIdentifier("food.entry")
+                                 Divider().overlay(Theme.rule)
+                             }
+                         }
+diff --git a/RecompUITests/RecompUITests.swift b/RecompUITests/RecompUITests.swift
+new file mode 100644
+index 0000000..45924b4
+--- /dev/null
++++ b/RecompUITests/RecompUITests.swift
+@@ -0,0 +1,82 @@
++import XCTest
++
++// No accounts, Health access, real diary or AI server is used. The app recognizes
++// these launch flags ONLY in Debug simulator builds and uses an isolated diary.
++final class RecompUITests: XCTestCase {
++    private var app: XCUIApplication!
++    override func setUpWithError() throws {
++        #if !targetEnvironment(simulator)
++        throw XCTSkip("UI tests are simulator-only; never run synthetic records against personal Health.")
++        #endif
++        continueAfterFailure = false
++        app = XCUIApplication()
++        app.launchArguments = ["--recomp-ui-test", "--reset-test-diary", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
++        app.launch()
++        XCTAssertTrue(app.buttons["food.log"].waitForExistence(timeout: 10))
++    }
++    override func tearDownWithError() throws {
++        if let app {
++            let image = XCTAttachment(screenshot: app.screenshot())
++            image.name = name; image.lifetime = .keepAlways; add(image)
++            app.terminate()
++        }
++    }
++    private func replace(_ identifier: String, with text: String) {
++        let field = app.textFields[identifier]
++        XCTAssertTrue(field.waitForExistence(timeout: 5))
++        field.tap()
++        let current = field.value as? String ?? ""
++        if !current.isEmpty && current != field.placeholderValue {
++            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
++        }
++        field.typeText(text)
++    }
++    private func addFood() {
++        app.buttons["food.log"].tap()
++        replace("food.name", with: "Synthetic UI meal")
++        replace("nutrition.calories", with: "500")
++        replace("nutrition.protein", with: "30")
++        replace("nutrition.carbs", with: "50")
++        replace("nutrition.fat", with: "20")
++        app.buttons["food.save"].tap()
++        XCTAssertTrue(app.buttons.matching(identifier: "food.entry").firstMatch.waitForExistence(timeout: 5))
++        XCTAssertTrue(app.buttons.matching(identifier: "food.entry").firstMatch.label.contains("Synthetic UI meal"))
++    }
++    func testNavigationAndEmptyScreens() {
++        for label in ["Body", "Trends", "Maintenance", "Settings", "Today"] {
++            let tab = app.tabBars.buttons[label]
++            XCTAssertTrue(tab.exists); tab.tap()
++        }
++        XCTAssertTrue(app.buttons["food.log"].exists)
++    }
++    func testFoodSurvivesRelaunch() {
++        addFood()
++        app.terminate()
++        app.launchArguments.removeAll { $0 == "--reset-test-diary" }
++        app.launch()
++        XCTAssertTrue(app.buttons.matching(identifier: "food.entry").firstMatch.waitForExistence(timeout: 10))
++        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 1)
++    }
++    func testCancelFoodDoesNotLog() {
++        app.buttons["food.log"].tap()
++        replace("food.name", with: "Never saved")
++        app.navigationBars.buttons["Cancel"].tap()
++        XCTAssertTrue(app.buttons["food.log"].waitForExistence(timeout: 5))
++        XCTAssertEqual(app.buttons.matching(identifier: "food.entry").count, 0)
++    }
++    func testCheckHasNoLogButtonAndDoesNotChangeDiary() {
++        app.buttons["food.check"].tap()
++        XCTAssertTrue(app.navigationBars["Check food"].waitForExistence(timeout: 5))
++        XCTAssertFalse(app.navigationBars.buttons["Log meal"].exists)
++        app.navigationBars.buttons["Close"].tap()
++        XCTAssertTrue(app.buttons["food.log"].waitForExistence(timeout: 5))
++    }
++    func testWeightCanBeLoggedLocally() {
++        app.tabBars.buttons["Body"].tap()
++        app.buttons["Log measurements"].tap()
++        replace("measurement.weight", with: "85")
++        app.navigationBars.buttons["Save"].tap()
++        XCTAssertTrue(app.buttons["Log measurements"].waitForExistence(timeout: 5))
++        XCTAssertFalse(app.navigationBars["Log measurements"].exists)
++    }
++}
+diff --git a/RecompWidget/PrivacyInfo.xcprivacy b/RecompWidget/PrivacyInfo.xcprivacy
+index 23a9697..6be0f26 100644
+--- a/RecompWidget/PrivacyInfo.xcprivacy
++++ b/RecompWidget/PrivacyInfo.xcprivacy
+@@ -3,7 +3,16 @@
+ <plist version="1.0">
+ <dict>
+ 	<key>NSPrivacyAccessedAPITypes</key>
+-	<array/>
++	<array>
++		<dict>
++			<key>NSPrivacyAccessedAPIType</key>
++			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
++			<key>NSPrivacyAccessedAPITypeReasons</key>
++			<array>
++				<string>C617.1</string>
++			</array>
++		</dict>
++	</array>
+ 	<key>NSPrivacyCollectedDataTypes</key>
+ 	<array/>
+ 	<key>NSPrivacyTracking</key>
+diff --git a/RecompWidget/RecompWidget.swift b/RecompWidget/RecompWidget.swift
+index 5598f9e..95bc177 100644
+--- a/RecompWidget/RecompWidget.swift
++++ b/RecompWidget/RecompWidget.swift
+@@ -36,7 +36,7 @@ struct RecompWidgetView: View {
+     let entry: RecompTimelineEntry
+     @Environment(\.widgetFamily) private var family
+     private var visible: WidgetSnapshot? {
+-        guard let s = entry.snapshot, s.showsNumbers, s.isCurrent(now: entry.date) else { return nil }
++        guard let s = entry.snapshot, s.showsNumbers, s.isCurrent(now: Date()) else { return nil }
+         return s
+     }
+     var body: some View {
+diff --git a/Server/README.md b/Server/README.md
+index e54aef9..e15f6ee 100644
+--- a/Server/README.md
++++ b/Server/README.md
+@@ -11,7 +11,7 @@ Routes:
+ - `POST /v1/estimate`: bearer-authenticated, JSON only, at most 12.3 MB.
+ 
+ Request fields: `description` (up to 8000 chars), `clarification` (up to 2000; total
+-context limited to 8000), `images` (0–3 `{base64: "..."}` JPEGs), optional
++context limited to 8000), `images` (0–6 JPEGs with `base64`, optional `role` and `caption`), optional
+ `currentEstimate`, `lockedItemIDs`, `excludedFoods`. Unknown top-level fields are rejected.
+ Do not send HealthKit records or the rest of the diary.
+ 
+@@ -25,3 +25,5 @@ without HTTPS. In-memory limits reset at restart and are not a durable spending
+ No provider key, meal data or images are intentionally logged or saved by this code.
+ 
+ Version 1.7 accepts up to six resized JPEGs with optional role/caption and asks for per-food evidence. Deploy this server with the matching app. It does not provide barcode lookup or process activity/Health records.
++
++1.7.1 rejects non-JSON media types, proxy credentials that reuse an upstream API key, and estimates citing absent photos. Upstream response data is capped during streaming, not after buffering. Run `node --test` for 61 current tests; AI responses are mocked.
+diff --git a/Server/estimate.mjs b/Server/estimate.mjs
+index 6076f24..56ea167 100644
+--- a/Server/estimate.mjs
++++ b/Server/estimate.mjs
+@@ -132,6 +132,31 @@ export function decodeProviderResponse(raw) {
+   try { return validateEstimate(JSON.parse(text)); }
+   catch { throw new RequestError(502, 'The AI returned invalid nutrition data. Your draft is unchanged.'); }
+ }
++// Enforce the cap while reading, not after response.text() has allocated an
++// arbitrarily large response. Cancel the upstream stream on every early exit.
++async function readProviderText(response) {
++  const maximum = 250_000;
++  if (Number(response.headers.get('content-length')) > maximum) {
++    await response.body?.cancel();
++    throw new RequestError(502, 'AI response was too large.');
++  }
++  if (!response.body) throw new RequestError(502, 'AI service returned unreadable data.');
++  const reader = response.body.getReader();
++  const parts = []; let size = 0, complete = false;
++  try {
++    for (;;) {
++      const {done,value} = await reader.read();
++      if (done) { complete = true; break; }
++      size += value.byteLength;
++      if (size > maximum) throw new RequestError(502, 'AI response was too large.');
++      parts.push(Buffer.from(value));
++    }
++    return Buffer.concat(parts, size).toString('utf8');
++  } finally {
++    if (!complete) await reader.cancel().catch(()=>{});
++    reader.releaseLock();
++  }
++}
+ export async function estimateMeal(request, config, fetchImpl = fetch, signal) {
+   const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(65000)]) : AbortSignal.timeout(65000);
+   const response = await fetchImpl('https://api.openai.com/v1/responses', {
+@@ -144,11 +169,15 @@ export async function estimateMeal(request, config, fetchImpl = fetch, signal) {
+     if (response.status === 401 || response.status === 403) throw new RequestError(503, 'The server API key or model access needs attention.');
+     throw new RequestError(502, 'The AI service could not complete this estimate. Try later or log manually.');
+   }
+-  const rawText = await response.text();
+-  if (rawText.length > 250000) throw new RequestError(502, 'AI response was too large.');
++  const rawText = await readProviderText(response);
+   let raw;
+   try { raw = JSON.parse(rawText); } catch { throw new RequestError(502, 'AI service returned unreadable data.'); }
+-  try { return enforceLocks(decodeProviderResponse(raw), request.currentEstimate, request.lockedItemIDs); }
++  try {
++    const result = enforceLocks(decodeProviderResponse(raw), request.currentEstimate, request.lockedItemIDs);
++    if (result.items.some(item => item.evidence?.some(e => e.photoNumber != null && e.photoNumber > request.images.length)))
++      throw new RequestError(502, 'The AI cited a photo that was not supplied. Your draft is unchanged; retry or edit manually.');
++    return result;
++  }
+   catch (error) { if (error.status >= 500 || error.status === 422) throw error;
+     throw new RequestError(502, 'The refined result conflicted with locked foods. Unlock an item or try a more specific correction.'); }
+ }
+diff --git a/Server/server.mjs b/Server/server.mjs
+index fb855d6..8187ac5 100644
+--- a/Server/server.mjs
++++ b/Server/server.mjs
+@@ -7,6 +7,7 @@ export function configFromEnv(env = process.env) {
+   const apiKey = env.OPENAI_API_KEY?.trim(), accessToken = env.RECOMP_ACCESS_TOKEN?.trim();
+   if (!apiKey || apiKey.includes('replace-me')) throw new Error('Set OPENAI_API_KEY on the server.');
+   if (!accessToken || accessToken.length < 32 || accessToken.includes('replace-me')) throw new Error('Set a random RECOMP_ACCESS_TOKEN of at least 32 characters.');
++  if (accessToken === apiKey || accessToken.startsWith('sk-')) throw new Error('Use an independent random RECOMP_ACCESS_TOKEN, never the upstream API key.');
+   const port = Number(env.PORT || 8787);
+   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT.');
+   return {apiKey, accessToken, model:env.OPENAI_MODEL || 'gpt-4.1-mini', host:env.HOST || '127.0.0.1', port};
+@@ -45,7 +46,7 @@ export function createServer(config, provider = estimateMeal) {
+       if (req.method === 'GET' && req.url === '/health') return send(res,200,{ok:true});
+       if (req.method !== 'POST' || req.url !== '/v1/estimate') return send(res,404,{error:'Not found.'});
+       if (!timingSafeEqual(expected, digest(req.headers.authorization ?? ''))) return send(res,401,{error:'Incorrect server access token. Check estimator settings.'});
+-      if (!req.headers['content-type']?.toLowerCase().startsWith('application/json')) return send(res,415,{error:'Use application/json.'});
++      if (req.headers['content-type']?.split(';',1)[0].trim().toLowerCase() !== 'application/json') return send(res,415,{error:'Use application/json.'});
+       if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') return send(res,415,{error:'Compressed uploads are not accepted.'});
+       if (Number(req.headers['content-length'] || 0) > MAX_BODY) return send(res,413,{error:'Photos are too large.'});
+       const now = Date.now(), thisMinute = Math.floor(now/60000), thisDay = Math.floor(now/86400000);
+diff --git a/Server/test/audit.test.mjs b/Server/test/audit.test.mjs
+new file mode 100644
+index 0000000..413251d
+--- /dev/null
++++ b/Server/test/audit.test.mjs
+@@ -0,0 +1,84 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import http from 'node:http';
++import {createServer, configFromEnv} from '../server.mjs';
++import {estimateMeal} from '../estimate.mjs';
++const token = 'synthetic-access-token-'.repeat(3);
++const input = {description:'Synthetic eggs',images:[],lockedItemIDs:[],excludedFoods:[],currentEstimate:null};
++const meal = () => ({title:'Eggs',items:[{id:'eggs',name:'Eggs',portion:'2 eggs',nutrition:{calories:144,protein:12,carbs:1,fat:10},confidence:'medium',assumptions:[],evidence:[]}],assumptions:[],questions:[]});
++const completed = value => ({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]});
++async function serve(fn, provider=async()=>meal(), extra={}) {
++  const server=createServer({accessToken:token,apiKey:'synthetic-private-secret',model:'test',perMinute:100,...extra},provider);
++  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
++  const base=`http://127.0.0.1:${server.address().port}`;
++  const post=(body=input,headers={},signal)=>fetch(base+'/v1/estimate',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...headers},body:typeof body==='string'?body:JSON.stringify(body),signal});
++  try { await fn({server,base,post}); } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
++}
++const tick = () => new Promise(resolve=>setTimeout(resolve,5));
++async function until(check) { for(let i=0;i<200;i++){if(check())return;await tick();}throw new Error('Timed out waiting for deterministic test callback'); }
++
++test('reject JSON-lookalike content types before charging for an estimate',()=>serve(async({post})=>{
++  for(const content of ['application/jsonp','application/json-invalid']) assert.equal((await post(input,{'Content-Type':content})).status,415);
++}));
++test('accept normal JSON media type with charset',()=>serve(async({post})=>assert.equal((await post(input,{'Content-Type':'application/json; charset=UTF-8'})).status,200)));
++test('configuration cannot reuse upstream API key as phone access token',()=>{
++  const secret='sk-synthetic-key-not-valid-'.repeat(3);
++  assert.throws(()=>configFromEnv({OPENAI_API_KEY:secret,RECOMP_ACCESS_TOKEN:secret}));
++});
++test('provider cannot cite a photo which was never supplied',async()=>{
++  const output=meal();output.items[0].evidence=[{kind:'label',photoNumber:1,detail:'Invented photo reference'}];
++  await assert.rejects(()=>estimateMeal(input,{apiKey:'test',model:'test'},async()=>new Response(JSON.stringify(completed(output)))),e=>e.status===502);
++});
++test('oversized streaming provider response is cancelled before buffering the full response',async()=>{
++  let pulls=0,cancelled=false;
++  const stream=new ReadableStream({pull(controller){pulls++;controller.enqueue(new Uint8Array(100_000).fill(32));if(pulls>=100)controller.close();},cancel(){cancelled=true;}});
++  await assert.rejects(()=>estimateMeal(input,{apiKey:'test',model:'test'},async()=>new Response(stream)),e=>e.status===502);
++  assert.ok(pulls<10,`buffered ${pulls} chunks`);assert.ok(cancelled);
++});
++test('two active requests cap concurrency and capacity recovers',async()=>{
++  let active=0,calls=0;const releases=[];
++  await serve(async({post})=>{
++    const a=post();const b=post();await until(()=>active===2);
++    const blocked=await post();assert.equal(blocked.status,429);assert.equal(calls,2);
++    releases.splice(0).forEach(r=>r());assert.equal((await a).status,200);assert.equal((await b).status,200);
++    const c=post();await until(()=>calls===3);releases.shift()();assert.equal((await c).status,200);
++  },async()=>{active++;calls++;await new Promise(r=>releases.push(r));active--;return meal();});
++});
++test('client cancellation reaches upstream and releases concurrency slot',async()=>{
++  let started=false,cancelled=false;
++  await serve(async({post})=>{
++    const abort=new AbortController();const pending=post(input,{},abort.signal).catch(e=>e);
++    await until(()=>started);abort.abort();await pending;await until(()=>cancelled);
++    assert.equal((await post()).status,200);
++  },async(_input,_config,_fetch,signal)=>{
++    if(started)return meal();started=true;
++    await new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>{cancelled=true;reject(new DOMException('Cancelled','AbortError'));},{once:true});});
++    return meal();
++  });
++});
++test('a failed provider releases slots and never leaks its error/secret',()=>serve(async({post})=>{
++  for(let i=0;i<4;i++){const r=await post();assert.equal(r.status,502);assert.ok(!(await r.text()).includes('synthetic-private-secret'));}
++},async()=>{throw new Error('synthetic-private-secret, private meal');}));
++test('unauthenticated calls do not exhaust authorized daily quota',()=>serve(async({post})=>{
++  for(let i=0;i<5;i++)assert.equal((await post(input,{Authorization:'Bearer invalid'})).status,401);
++  assert.equal((await post()).status,200);assert.equal((await post()).status,429);
++},undefined,{perDay:1}));
++test('truncated socket upload never reaches provider or prevents subsequent requests',async()=>{
++  let calls=0;
++  await serve(async({base,post})=>{
++    await new Promise(resolve=>{
++      const req=http.request(base+'/v1/estimate',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Content-Length':1000}});
++      req.on('error',()=>{});req.on('close',resolve);req.write('{"description":');setTimeout(()=>req.destroy(),15);
++    });
++    await tick();assert.equal(calls,0);assert.equal((await post()).status,200);assert.equal(calls,1);
++  },async()=>{calls++;return meal();});
++});
++test('oversized chunked request is rejected without a declared length',()=>serve(async({base})=>{
++  const status=await new Promise((resolve,reject)=>{
++    const req=http.request(base+'/v1/estimate',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Transfer-Encoding':'chunked'}},res=>{res.resume();resolve(res.statusCode);});
++    req.on('error',reject);req.end(' '.repeat(12_300_001));
++  });assert.equal(status,413);
++}));
++test('provider aborts are mapped to a retryable timeout without private messages',()=>serve(async({post})=>{
++  const r=await post();assert.equal(r.status,504);assert.ok(!(await r.text()).includes('private timeout'));
++},async()=>{throw new DOMException('private timeout','AbortError');}));
+diff --git a/TestSupport/AuditHarness/Harness.swift b/TestSupport/AuditHarness/Harness.swift
+new file mode 100644
+index 0000000..abf42d1
+--- /dev/null
++++ b/TestSupport/AuditHarness/Harness.swift
+@@ -0,0 +1,125 @@
++import Foundation
++
++@main struct AuditHarness {
++    @MainActor static func main() async throws {
++        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("recomp-audit-" + UUID().uuidString)
++        defer { try? FileManager.default.removeItem(at: directory) }
++        var checks = 0, failures = 0
++        func check(_ condition: @autoclosure () -> Bool, _ name: String) {
++            checks += 1
++            if condition() { print("PASS: \(name)") } else { failures += 1; print("FAIL: \(name)") }
++        }
++        func makeStore(_ name: String, health: HealthKitService) -> DiaryStore {
++            DiaryStore(fileURL: directory.appendingPathComponent(name + ".json"), health: health)
++        }
++        let now = Date()
++        // Work arriving during the final async read MUST be drained before sync completes.
++        let h = HealthKitService(); h.writableNutrients = Set(Nutrient.allCases)
++        let store = makeStore("sync-tail", health: h)
++        await store.connectHealth()
++        let meal = FoodEntry(name: "Synthetic late save", date: now, meal: .lunch, nutrition: Nutrition(calories: 500, protein: 30, carbs: 50, fat: 20))
++        h.beforeNutritionRead = { _ in
++            check(store.saveEntry(meal, makeTemplate: false), "save during final Health read commits")
++            await store.synchronize() // equivalent to the save's queued sync arriving now
++        }
++        await store.synchronize()
++        check(store.state.entries.first?.exportCount == 4, "sync drains edits arriving during its final read")
++
++        // The UI changes the selected date synchronously; an old response must not attach to it.
++        let rh = HealthKitService(); let reader = makeStore("read-switch", health: rh)
++        await reader.connectHealth()
++        let beforeDay = reader.selectedDay
++        let otherDay = Calendar.current.date(byAdding: .day, value: -1, to: beforeDay)!
++        rh.nutritionReads = [HealthNutritionSample(id: UUID(), date: beforeDay, nutrient: .calories, value: 100,
++            sourceName: "Synthetic", sourceBundleID: "test.other", localEntryID: nil)]
++        rh.beforeBodyRead = {
++            reader.selectDay(otherDay)
++        }
++        await reader.refreshHealth()
++        check(reader.healthSamples.isEmpty, "old-day response never installs after selecting another date")
++        check(reader.lastRefreshed == nil, "old-day response cannot certify the new day refreshed")
++        for _ in 0..<10 { await Task.yield() }
++
++        // A future record is not consumed food and must not become an export.
++        let future = FoodEntry(name: "Not eaten", date: now.addingTimeInterval(86400), meal: .dinner, nutrition: Nutrition(calories: 200))
++        let fh = HealthKitService(); let food = makeStore("future", health: fh)
++        check(!food.saveEntry(future, makeTemplate: false), "reject future food rather than silently logging a plan")
++        check(food.state.entries.isEmpty && fh.foodSaves.isEmpty, "rejected future food has no persistence or Health effects")
++
++        // Aggregate correction with retained photos used to reopen as a blank/new AI estimate.
++        let jpeg = Data([0xff,0xd8,0x01,0xff,0xd9])
++        var original = FoodEntry(name: "Corrected label", date: now, meal: .lunch,
++            nutrition: Nutrition(calories: 310, protein: 25, carbs: 30, fat: 10), isEstimate: false)
++        original.photos = [MealPhoto(jpeg: jpeg, role: .nutritionLabel)]
++        let model = MealEstimatorModel(date: now, original: original)
++        check(model.draft?.estimate.total == original.nutrition, "reopening photos preserves corrected aggregate nutrition")
++        check(model.draft?.lockedItemIDs.isEmpty == false, "aggregate correction is protected from AI replacement")
++        check(!model.hasChanges, "opening an unchanged corrected meal does not claim edits")
++
++        // Stored item evidence must not point at a different photo after replacement/refinement.
++        let evidence = FoodEvidence(kind: .label, photoNumber: 1, detail: "old label, 310 kcal")
++        let item = EstimatedFood(id: "old", name: "Old label food", portion: "1 serving", nutrition: original.nutrition, evidence: [evidence])
++        original.aiDraft = EstimateDraft(estimate: MealEstimate(title: original.name, items: [item]), lockedItemIDs: [item.id])
++        let revised = MealEstimatorModel(date: now, original: original)
++        revised.photos = [MealPhoto(jpeg: jpeg, role: .plate, caption: "replacement image")]
++        EstimationService.response = MealEstimate(title: original.name, items: [item])
++        revised.begin(configuration: EstimatorConfiguration())
++        for _ in 0..<1000 { if !revised.busy { break }; await Task.yield() }
++        check(revised.draft?.estimate.items.first?.evidence?.first?.photoNumber == nil,
++            "locked evidence cannot be relabelled as a replacement photo")
++
++        // Photo-only refinements append a generated clarification; preflight must count it.
++        var nearLimit = original
++        nearLimit.aiDraft?.context = String(repeating: "a", count: 7950)
++        let limited = MealEstimatorModel(date: now, original: nearLimit)
++        limited.photos = [MealPhoto(jpeg: jpeg, role: .plate)]
++        check(!limited.canRequest, "photo-only refinement reserves space for its generated clarification")
++
++        // Real filesystem failure, not an injected save success/failure boolean.
++        let diskHealth = HealthKitService()
++        let diskURL = directory.appendingPathComponent("disk-failure.json")
++        let disk = DiaryStore(fileURL: diskURL, health: diskHealth)
++        await disk.connectHealth()
++        diskHealth.nutritionReads = [HealthNutritionSample(id: UUID(), date: disk.selectedDay, nutrient: .calories, value: 123,
++            sourceName: "Synthetic", sourceBundleID: "test.other", localEntryID: nil)]
++        await disk.refreshHealth()
++        let diskBefore = disk.state
++        let savedBytes = try Data(contentsOf: diskURL)
++        try FileManager.default.removeItem(at: diskURL)
++        try FileManager.default.createDirectory(at: diskURL, withIntermediateDirectories: false)
++        var publications = 0
++        disk.didCommit = { _ in publications += 1 }
++        check(!disk.saveEntry(meal, makeTemplate: false), "a real filesystem write failure rejects the save")
++        check(disk.state == diskBefore && publications == 0, "failed persistence changes neither memory nor widget publication")
++        disk.pauseHealth()
++        check(disk.state.healthEnabled && disk.healthSamples.count == 1, "failed pause does not clear data while Health remains enabled")
++        try FileManager.default.removeItem(at: diskURL)
++        try savedBytes.write(to: diskURL)
++        let restarted = DiaryStore(fileURL: diskURL, health: HealthKitService())
++        check(restarted.state == diskBefore, "restart reads original committed state after a failed save")
++        check(disk.saveEntry(meal, makeTemplate: false), "logging recovers when filesystem access returns")
++        check(publications == 1, "only the successful commit publishes a new widget snapshot")
++
++        // Editing confirmed intake must invalidate today's cached maintenance estimate
++        // even when Health is disabled (and consequently no sync will refresh it).
++        let fixture = AdaptiveDemo.stable.data()
++        var synthetic = fixture.state
++        synthetic.measurements = fixture.points.map { BodyMeasurement(id: $0.id, date: $0.date, metric: $0.metric,
++            value: $0.value, method: $0.method) }
++        let middle = Calendar.current.date(byAdding: .day, value: -14, to: Calendar.current.startOfDay(for: now))!
++        var correction = FoodEntry(name: "Synthetic confirmed food", date: middle, meal: .lunch, nutrition: .startingTargets)
++        synthetic.entries = [correction]
++        let historyURL = directory.appendingPathComponent("history-invalidation.json")
++        try StateFile(url: historyURL).save(synthetic)
++        let historyStore = DiaryStore(fileURL: historyURL, health: HealthKitService())
++        historyStore.rememberMaintenance()
++        check(historyStore.state.maintenanceHistory.count == 1, "synthetic complete intake produces today's audit snapshot")
++        correction.nutrition.calories += 100
++        check(historyStore.saveEntry(correction, makeTemplate: false), "correction to confirmed past food is saved")
++        check(historyStore.maintenanceReport.estimate == nil && historyStore.state.maintenanceHistory.isEmpty,
++            "food correction removes now-invalid cached maintenance without requiring Health sync")
++
++        print("AUDIT: \(checks) checks, \(failures) failures")
++        if failures > 0 { exit(1) }
++    }
++}
+diff --git a/TestSupport/NativeTests/BackupCryptoTests.swift b/TestSupport/NativeTests/BackupCryptoTests.swift
+new file mode 100644
+index 0000000..a93baf2
+--- /dev/null
++++ b/TestSupport/NativeTests/BackupCryptoTests.swift
+@@ -0,0 +1,43 @@
++import XCTest
++import Foundation
++
++// This target compiles the production Core and BackupCrypto sources against Apple's
++// SDK, not portable substitutes. Run only with the supplied disposable-simulator runner.
++final class BackupCryptoTests: XCTestCase {
++    private func payload() -> BackupPayload {
++        var state = AppState()
++        state.entries = [FoodEntry(name: "Synthetic native backup", date: Date(timeIntervalSince1970: 1_700_000_000),
++            meal: .lunch, nutrition: Nutrition(calories: 500, protein: 30, carbs: 50, fat: 20))]
++        return BackupPayload(createdAt: Date(timeIntervalSince1970: 1_700_000_001), bundleID: "test.recomp.backupfixture", appearance: "dark", state: state)
++    }
++    func testIndependentFixture() throws {
++        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "backup-reference", withExtension: "recompbackup"))
++        let result = try BackupCrypto.decrypt(Data(contentsOf: url), password: "synthetic fixture password only")
++        XCTAssertEqual(result.bundleID, "test.recomp.backupfixture")
++        XCTAssertTrue(result.state.entries.isEmpty)
++        XCTAssertTrue(result.state.isValid)
++    }
++    func testExactRoundTripAndIndependentRandomness() throws {
++        let expected = payload(), password = "synthetic password for native test"
++        let first = try BackupCrypto.encrypt(expected, password: password)
++        let second = try BackupCrypto.encrypt(expected, password: password)
++        XCTAssertNotEqual(first, second)
++        XCTAssertEqual(try BackupCrypto.decrypt(first, password: password), expected)
++        XCTAssertEqual(try BackupCrypto.decrypt(second, password: password), expected)
++    }
++    func testWrongPasswordAndTamperingFail() throws {
++        let password = "synthetic password for native test"
++        let bytes = try BackupCrypto.encrypt(payload(), password: password)
++        XCTAssertThrowsError(try BackupCrypto.decrypt(bytes, password: "incorrect synthetic password"))
++        var envelope = try BackupEnvelope.decode(bytes)
++        envelope.sealed[envelope.sealed.count - 1] ^= 1
++        XCTAssertThrowsError(try BackupCrypto.decrypt(JSONEncoder().encode(envelope), password: password))
++        envelope = try BackupEnvelope.decode(bytes); envelope.salt[0] ^= 1
++        XCTAssertThrowsError(try BackupCrypto.decrypt(JSONEncoder().encode(envelope), password: password))
++    }
++    func testUnicodeAndNullPasswordBytes() throws {
++        let password = "synthetic\0password中文🏋️ for test"
++        let expected = payload()
++        XCTAssertEqual(try BackupCrypto.decrypt(BackupCrypto.encrypt(expected, password: password), password: password), expected)
++    }
++}
+diff --git a/TestSupport/StoreHarness/Mocks.swift b/TestSupport/StoreHarness/Mocks.swift
+index 2b7fb1f..2add16f 100644
+--- a/TestSupport/StoreHarness/Mocks.swift
++++ b/TestSupport/StoreHarness/Mocks.swift
+@@ -23,6 +23,9 @@ struct NutritionReadResult { var samples: [HealthNutritionSample] = []; var warn
+     var bodyRemovals: [BodyDeletion] = []
+     var beforeSave: ((BodyMeasurement) async -> Void)?
+     var failBodyWrites = false
++    var nutritionReads: [HealthNutritionSample] = []
++    var beforeNutritionRead: ((Date) async -> Void)?
++    var beforeBodyRead: (() async -> Void)?
+     func requestDXAAccess() async throws { if failDXAAccess { throw CocoaError(.userCancelled) } }
+     func upsertDXA(scanID: UUID, scanDay: String, link: DXAHealthLink, candidate: DXAHealthCandidate) async throws {
+         if failDXAWrites { throw CocoaError(.fileWriteUnknown) }
+@@ -35,8 +38,14 @@ struct NutritionReadResult { var samples: [HealthNutritionSample] = []; var warn
+     }
+     func requestAccess() async throws {}
+     func requestBodyAccess() async throws {}
+-    func readNutrition(day: Date) async -> NutritionReadResult { NutritionReadResult() }
+-    func readBody(includeComposition: Bool) async -> (samples: [HealthBodySample], warnings: [String]) { (bodyReads, []) }
++    func readNutrition(day: Date) async -> NutritionReadResult {
++        if let callback = beforeNutritionRead { beforeNutritionRead = nil; await callback(day) }
++        return NutritionReadResult(samples: nutritionReads.filter { Calendar.current.isDate($0.date, inSameDayAs: day) })
++    }
++    func readBody(includeComposition: Bool) async -> (samples: [HealthBodySample], warnings: [String]) {
++        if let callback = beforeBodyRead { beforeBodyRead = nil; await callback() }
++        return (bodyReads, [])
++    }
+     func removeMetric(entryID: UUID, nutrient: Nutrient) async throws { foodRemovals.append(entryID) }
+     func upsert(_ entry: FoodEntry, nutrient: Nutrient) async throws { foodSaves.append(entry.id) }
+     func removeBody(_ deletion: BodyDeletion) async throws { bodyRemovals.append(deletion) }
+diff --git a/Tests/RecompCoreTests/AdaptiveTests.swift b/Tests/RecompCoreTests/AdaptiveTests.swift
+index cf53473..509b58b 100644
+--- a/Tests/RecompCoreTests/AdaptiveTests.swift
++++ b/Tests/RecompCoreTests/AdaptiveTests.swift
+@@ -1,5 +1,7 @@
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class AdaptiveTests: XCTestCase {
+     var calendar: Calendar {
+diff --git a/Tests/RecompCoreTests/AuditRegressionTests.swift b/Tests/RecompCoreTests/AuditRegressionTests.swift
+new file mode 100644
+index 0000000..90b35c1
+--- /dev/null
++++ b/Tests/RecompCoreTests/AuditRegressionTests.swift
+@@ -0,0 +1,127 @@
++import Foundation
++import XCTest
++#if !RECOMP_NATIVE_TESTS
++@testable import RecompCore
++#endif
++
++final class AuditRegressionTests: XCTestCase {
++    func testFoodRejectsNonfiniteDate() {
++        var entry = FoodEntry(name: "Synthetic", date: Date(), meal: .lunch, nutrition: Nutrition(calories: 500))
++        entry.date = Date(timeIntervalSince1970: -.infinity)
++        XCTAssertFalse(entry.isValid)
++    }
++    func testFoodRejectsOverflowingVersion() {
++        var entry = FoodEntry(name: "Synthetic", date: Date(), meal: .lunch, nutrition: Nutrition(calories: 500))
++        entry.version = Int.max
++        XCTAssertFalse(entry.isValid)
++    }
++    func testFoodRejectsImpossibleAndUnknownReceipts() {
++        var entry = FoodEntry(name: "Synthetic", date: Date(), meal: .lunch, nutrition: Nutrition(calories: 500))
++        entry.exportedVersions = ["calories": 100]
++        XCTAssertFalse(entry.isValid)
++        entry.exportedVersions = ["unknown": 1]
++        XCTAssertFalse(entry.isValid)
++    }
++    func testBodyRejectsOverflowingVersionAndFutureReceipt() {
++        var reading = BodyMeasurement(date: Date(), metric: .weight, value: 85)
++        reading.version = Int.max
++        XCTAssertFalse(reading.isValid)
++        reading.version = 1; reading.exportedVersion = 20
++        XCTAssertFalse(reading.isValid)
++    }
++    func testImpossibleDayCannotEnterBackup() {
++        let day = DayReview(dayKey: "2026-02-31", timeZoneID: "UTC", confirmedAt: Date(), total: Nutrition(calories: 2500), estimatedCalorieFraction: 0, includedHealth: false)
++        XCTAssertFalse(day.isValid)
++        var state = AppState(); state.dayReviews = [day]
++        XCTAssertThrowsError(try BackupPayload(createdAt: Date(), bundleID: "test", appearance: "system", state: state).encode())
++    }
++    func testDuplicateTemplateIDsRejected() {
++        var state = AppState(); state.templates.append(state.templates[0])
++        XCTAssertFalse(state.isValid)
++    }
++    func testInvalidStateSaveLeavesExistingBytesUnchanged() throws {
++        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
++        defer { try? FileManager.default.removeItem(at: root) }
++        let file = StateFile(url: root.appendingPathComponent("diary.json"))
++        let good = AppState(); try file.save(good)
++        let prior = try Data(contentsOf: file.url)
++        var bad = good; bad.targets.calories = -1
++        XCTAssertThrowsError(try file.save(bad))
++        XCTAssertEqual(try Data(contentsOf: file.url), prior)
++        XCTAssertEqual(try file.load(), good)
++    }
++    func testUnicodeAndEmbeddedNULBackupRoundTrip() throws {
++        var state = AppState()
++        state.entries = [FoodEntry(name: "鸡肉 🥙 café", date: Date(timeIntervalSince1970: 1_780_000_000), meal: .lunch,
++            nutrition: Nutrition(calories: 300, protein: 25, carbs: 30, fat: 10), note: "first\nsecond\u{0000}third")]
++        let payload = BackupPayload(createdAt: Date(timeIntervalSince1970: 1_780_000_000), bundleID: "test.recomp", appearance: "dark", state: state)
++        XCTAssertEqual(try BackupPayload.decode(payload.encode()), payload)
++    }
++    func testReadOnlyHypotheticalFoodNeverChangesOriginalAcrossRandomMeals() {
++        var rng = Random(seed: 17)
++        for _ in 0..<1000 {
++            var state = AppState()
++            let date = Date(timeIntervalSince1970: 1_780_000_000)
++            for _ in 0..<5 {
++                state.entries.append(FoodEntry(name: "Test", date: date, meal: .lunch, nutrition: rng.nutrition()))
++            }
++            let original = state
++            let total = DiaryMath.localTotal(entries: state.entries, day: date)
++            let extra = rng.nutrition()
++            let check = FoodCheckProjection(current: total, candidate: extra, targets: state.targets)
++            for metric in Nutrient.allCases {
++                let independent = state.entries.map { $0.nutrition[metric] }.reduce(0, +) + extra[metric]
++                XCTAssertEqual(check.projected[metric], independent, accuracy: 1e-8)
++                XCTAssertEqual(check.remaining[metric], state.targets[metric] - independent, accuracy: 1e-8)
++            }
++            XCTAssertEqual(state, original)
++        }
++    }
++    func testSleepUnionAgainstIndependentSecondGrid() {
++        var rng = Random(seed: 908)
++        let epoch = Date(timeIntervalSince1970: 1_780_000_000)
++        for _ in 0..<1000 {
++            var intervals: [(Date, Date)] = []
++            var covered = [Bool](repeating: false, count: 600)
++            for _ in 0..<20 {
++                let start = Int(rng.next() % 800) - 100
++                let length = Int(rng.next() % 200)
++                let end = start + length
++                intervals.append((epoch.addingTimeInterval(Double(start)), epoch.addingTimeInterval(Double(end))))
++                for second in 0..<600 where second >= start && second < end { covered[second] = true }
++            }
++            let expected = Double(covered.filter { $0 }.count)
++            XCTAssertEqual(ActivityMath.unionSeconds(intervals, from: epoch, to: epoch.addingTimeInterval(600)), expected)
++        }
++    }
++    func testScaleOffsetsCancelAcrossSeededHistories() throws {
++        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/Los_Angeles")!
++        let origin = c.date(from: DateComponents(year: 2026, month: 3, day: 1))! // spans spring DST
++        var rng = Random(seed: 5519)
++        for _ in 0..<500 {
++            let slope = (Double(rng.next() % 1000) - 500) / 10000
++            let offset = Double(rng.next() % 8000) / 100 - 40
++            var plain: [ScaleDay] = [], shifted: [ScaleDay] = []
++            for day in 0..<29 {
++                let source = day % 2 == 0 ? "home" : "other"
++                let date = c.date(byAdding: .day, value: day, to: origin)!
++                let value = 85 + slope * Double(day)
++                plain.append(ScaleDay(date: date, value: value, seriesID: source))
++                shifted.append(ScaleDay(date: date, value: value + (source == "other" ? offset : 0), seriesID: source))
++            }
++            let a = try XCTUnwrap(ScaleWeightFit.fit(plain, calendar: c))
++            let b = try XCTUnwrap(ScaleWeightFit.fit(shifted, calendar: c))
++            XCTAssertEqual(a.fit.slope, slope, accuracy: 1e-10)
++            XCTAssertEqual(b.fit.slope, slope, accuracy: 1e-10)
++            XCTAssertEqual(a.daily.count, b.daily.count)
++        }
++    }
++    private struct Random {
++        var seed: UInt64
++        mutating func next() -> UInt64 { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return seed }
++        mutating func nutrition() -> Nutrition {
++            Nutrition(calories: Double(next() % 15000)/10, protein: Double(next() % 1200)/10,
++                carbs: Double(next() % 2000)/10, fat: Double(next() % 800)/10)
++        }
++    }
++}
+diff --git a/Tests/RecompCoreTests/BodyTests.swift b/Tests/RecompCoreTests/BodyTests.swift
+index ae2bfbc..7bd63eb 100644
+--- a/Tests/RecompCoreTests/BodyTests.swift
++++ b/Tests/RecompCoreTests/BodyTests.swift
+@@ -1,5 +1,7 @@
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class BodyTests: XCTestCase {
+     let day = ISO8601DateFormatter().date(from: "2026-09-18T08:00:00-07:00")!
+diff --git a/Tests/RecompCoreTests/DXAHealthTests.swift b/Tests/RecompCoreTests/DXAHealthTests.swift
+index eb5b670..50c82aa 100644
+--- a/Tests/RecompCoreTests/DXAHealthTests.swift
++++ b/Tests/RecompCoreTests/DXAHealthTests.swift
+@@ -1,5 +1,7 @@
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class DXAHealthTests: XCTestCase {
+     func scan() -> DXAScan {
+diff --git a/Tests/RecompCoreTests/DXATests.swift b/Tests/RecompCoreTests/DXATests.swift
+index 6f4db53..a61e4f5 100644
+--- a/Tests/RecompCoreTests/DXATests.swift
++++ b/Tests/RecompCoreTests/DXATests.swift
+@@ -1,6 +1,8 @@
+ import Foundation
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class DXATests: XCTestCase {
+     private func scan(day: String = "2026-09-01", fat: Double = 20, group: String = "Clinic / scanner A") -> DXAScan {
+diff --git a/Tests/RecompCoreTests/Feature17Tests.swift b/Tests/RecompCoreTests/Feature17Tests.swift
+index df3d8f1..ba8e498 100644
+--- a/Tests/RecompCoreTests/Feature17Tests.swift
++++ b/Tests/RecompCoreTests/Feature17Tests.swift
+@@ -1,5 +1,7 @@
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class Feature17Tests: XCTestCase {
+     var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/Los_Angeles")!; return c }
+diff --git a/Tests/RecompCoreTests/MealEstimateTests.swift b/Tests/RecompCoreTests/MealEstimateTests.swift
+index ef08f60..760dc05 100644
+--- a/Tests/RecompCoreTests/MealEstimateTests.swift
++++ b/Tests/RecompCoreTests/MealEstimateTests.swift
+@@ -1,5 +1,7 @@
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class MealEstimateTests: XCTestCase {
+     private func rice(_ id: String = "rice") -> EstimatedFood {
+diff --git a/Tests/RecompCoreTests/RecompCoreTests.swift b/Tests/RecompCoreTests/RecompCoreTests.swift
+index 25fd2f0..72c9ab3 100644
+--- a/Tests/RecompCoreTests/RecompCoreTests.swift
++++ b/Tests/RecompCoreTests/RecompCoreTests.swift
+@@ -1,5 +1,7 @@
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class RecompCoreTests: XCTestCase {
+     private var calendar: Calendar {
+diff --git a/Tests/RecompCoreTests/ScaleTests.swift b/Tests/RecompCoreTests/ScaleTests.swift
+index 2e37978..da9231a 100644
+--- a/Tests/RecompCoreTests/ScaleTests.swift
++++ b/Tests/RecompCoreTests/ScaleTests.swift
+@@ -1,5 +1,7 @@
+ import XCTest
++#if !RECOMP_NATIVE_TESTS
+ @testable import RecompCore
++#endif
+ 
+ final class ScaleTests: XCTestCase {
+     var calendar: Calendar {
+diff --git a/scripts/check-audit.sh b/scripts/check-audit.sh
+new file mode 100755
+index 0000000..94bf4b1
+--- /dev/null
++++ b/scripts/check-audit.sh
+@@ -0,0 +1,12 @@
++#!/usr/bin/env bash
++set -euo pipefail
++cd "$(dirname "$0")/.."
++work=$(mktemp -d)
++trap 'rm -rf "$work"' EXIT
++sed '/^import Combine$/d' Recomp/Services/DiaryStore.swift > "$work/DiaryStore.swift"
++sed '/^import Combine$/d' Recomp/Services/MealEstimatorModel.swift > "$work/MealEstimatorModel.swift"
++# Both harnesses supply observation stand-ins; only retain a single definition.
++sed '/^protocol ObservableObject:/d; /^@propertyWrapper struct Published/d' TestSupport/EstimatorHarness/Mocks.swift > "$work/EstimatorMocks.swift"
++swiftc -swift-version 5 -parse-as-library Recomp/Core/*.swift "$work/DiaryStore.swift" "$work/MealEstimatorModel.swift" \
++  TestSupport/StoreHarness/Mocks.swift "$work/EstimatorMocks.swift" TestSupport/AuditHarness/Harness.swift -o "$work/audit"
++"$work/audit"
+diff --git a/scripts/check-native.sh b/scripts/check-native.sh
+new file mode 100755
+index 0000000..1cd751d
+--- /dev/null
++++ b/scripts/check-native.sh
+@@ -0,0 +1,42 @@
++#!/usr/bin/env bash
++# Native acceptance gate. Unlike the portable check, missing Xcode is FAILURE,
++# never a misleading green skip. Creates/deletes only its own fresh simulator.
++set -euo pipefail
++cd "$(dirname "$0")/.."
++if [[ "$(uname -s)" != "Darwin" ]] || ! command -v xcodebuild >/dev/null 2>&1; then
++  echo 'ERROR: native verification requires macOS with full Xcode and an installed iOS Simulator runtime.' >&2
++  exit 2
++fi
++result_root="$(pwd)/.native-results/$(date +%Y%m%d-%H%M%S)-$$"
++mkdir -p "$result_root"
++simulator=''
++cleanup() {
++  if [[ -n "$simulator" ]]; then
++    xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true
++    xcrun simctl delete "$simulator" >/dev/null 2>&1 || true
++  fi
++}
++trap cleanup EXIT
++xcodebuild -version | tee "$result_root/environment.log"
++./scripts/check-backup-mac.sh | tee "$result_root/crypto.log"
++selection=$(xcrun simctl list -j | python3 -c '
++import json,sys
++x=json.load(sys.stdin)
++r=[r for r in x["runtimes"] if r.get("isAvailable") and ".iOS-" in r["identifier"] and int(r["version"].split(".")[0])>=17]
++if not r: sys.exit("Install an iOS 17+ simulator runtime in Xcode Settings.")
++r=max(r,key=lambda r:tuple(map(int,r["version"].split("."))))
++available=x.get("devices",{}).get(r["identifier"],[])
++dev=next((d.get("deviceTypeIdentifier") for d in available if d.get("isAvailable") and "iPhone" in d["name"] and d.get("deviceTypeIdentifier")),None)
++if not dev:
++    candidates=[d for d in x["devicetypes"] if "iPhone" in d["name"]]
++    if not candidates: sys.exit("Install an iPhone simulator device type.")
++    dev=candidates[-1]["identifier"]
++print(dev+"|"+r["identifier"])
++')
++simulator=$(xcrun simctl create "Recomp-Audit-$$" "${selection%%|*}" "${selection#*|}")
++xcrun simctl boot "$simulator"
++xcrun simctl bootstatus "$simulator" -b
++common=(-project Recomp.xcodeproj -scheme Recomp -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath .derivedData-audit CODE_SIGNING_ALLOWED=NO)
++xcodebuild "${common[@]}" -configuration Debug -parallel-testing-enabled NO -resultBundlePath "$result_root/Tests.xcresult" test | tee "$result_root/tests.log"
++xcodebuild "${common[@]}" -configuration Release build | tee "$result_root/release-build.log"
++echo "Native gate passed. Logs, XCTest results and UI screenshots: $result_root"
+diff --git a/scripts/check.sh b/scripts/check.sh
+index 0722d03..c10870c 100755
+--- a/scripts/check.sh
++++ b/scripts/check.sh
+@@ -2,17 +2,17 @@
+ set -euo pipefail
+ cd "$(dirname "$0")/.."
+ swift test
++swift test -c release
+ python3 scripts/check-interface.py
+ python3 scripts/check-dxa-health.py
+ ./scripts/check-store.sh
+ ./scripts/check-estimator.sh
++./scripts/check-audit.sh
+ python3 scripts/check-features.py
+-if command -v node >/dev/null 2>&1; then (cd Server && node --test); else echo "Node 22+ required for server tests."; fi
++if command -v node >/dev/null 2>&1; then (cd Server && node --test); else echo "ERROR: Node 22+ required for server tests." >&2; exit 2; fi
+ if [[ "$(uname -s)" != "Darwin" ]] || ! command -v xcodebuild >/dev/null 2>&1; then
+   echo 'Core tests complete. Native iOS verification requires macOS with Xcode; no iOS build was performed.'
++  if [[ "${1:-}" == "--require-native" ]]; then exit 2; fi
+   exit 0
+ fi
+-./scripts/check-backup-mac.sh
+-xcodebuild -project Recomp.xcodeproj -scheme Recomp \
+-  -configuration Debug -destination 'generic/platform=iOS Simulator' \
+-  -derivedDataPath .derivedData CODE_SIGNING_ALLOWED=NO build
++./scripts/check-native.sh
+diff --git a/scripts/make_project.py b/scripts/make_project.py
+index 8c0deb6..1543ace 100755
+--- a/scripts/make_project.py
++++ b/scripts/make_project.py
+@@ -62,11 +62,58 @@ embed_build = obj('widgetEmbedBuild', f'isa = PBXBuildFile; fileRef = {widget_pr
+ embed_phase = obj('widgetEmbedPhase', f'isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = {array([embed_build])}; name = "Embed App Extensions"; runOnlyForDeploymentPostprocessing = 0;')
+ widget_proxy = obj('widgetProxy', f'isa = PBXContainerItemProxy; containerPortal = {ident("project")}; proxyType = 1; remoteGlobalIDString = {ident("widgetTarget")}; remoteInfo = RecompWidget;')
+ widget_dependency = obj('widgetDependency', f'isa = PBXTargetDependency; target = {ident("widgetTarget")}; targetProxy = {widget_proxy};')
++# Executable Apple-SDK tests. These are not app resources or production fixtures.
++# Hostless core/crypto tests never launch the app or request Health permissions.
++def add_test_target(name, paths, ui=False, fixture=None):
++    refs, builds, resource_builds = [], [], []
++    for f in paths:
++        path = f.relative_to(ROOT).as_posix()
++        if path.startswith('Recomp/'):
++            ref = ident('file:'+path)
++        else:
++            ref = obj(name+':file:'+path, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {q(path)}; sourceTree = "<group>";')
++        refs.append(ref)
++        builds.append(obj(name+':build:'+path, f'isa = PBXBuildFile; fileRef = {ref};'))
++    if fixture:
++        ref = obj(name+':fixture', f'isa = PBXFileReference; lastKnownFileType = file; path = {q(fixture)}; sourceTree = "<group>";')
++        refs.append(ref)
++        resource_builds.append(obj(name+':fixtureBuild', f'isa = PBXBuildFile; fileRef = {ref};'))
++    group = obj(name+':group', f'isa = PBXGroup; children = {array(refs)}; name = {name}; sourceTree = "<group>";')
++    product = obj(name+':product', f'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = {name}.xctest; sourceTree = BUILT_PRODUCTS_DIR;')
++    phases = [obj(name+':sourcePhase', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {array(builds)}; runOnlyForDeploymentPostprocessing = 0;'),
++        obj(name+':resourcePhase', f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = {array(resource_builds)}; runOnlyForDeploymentPostprocessing = 0;'),
++        obj(name+':frameworkPhase', 'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')]
++    configs = []
++    for config in ['Debug','Release']:
++        values = {'CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':args.team,
++            'PRODUCT_BUNDLE_IDENTIFIER':args.bundle_id+'.'+name, 'PRODUCT_NAME':'$(TARGET_NAME)',
++            'GENERATE_INFOPLIST_FILE':'YES', 'TARGETED_DEVICE_FAMILY':'1',
++            'SUPPORTED_PLATFORMS':'iphoneos iphonesimulator', 'SUPPORTS_MACCATALYST':'NO',
++            'ENABLE_TESTING_SEARCH_PATHS':'YES', 'SKIP_INSTALL':'YES',
++            'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @loader_path/Frameworks @executable_path/Frameworks',
++            'SWIFT_ACTIVE_COMPILATION_CONDITIONS':'$(inherited) RECOMP_NATIVE_TESTS'}
++        if ui: values['TEST_TARGET_NAME'] = 'Recomp'
++        encoded = ' '.join(f'{k} = {q(v)};' for k,v in values.items())
++        configs.append(obj(name+':config:'+config, f'isa = XCBuildConfiguration; buildSettings = {{ {encoded} }}; name = {config};'))
++    config_list = obj(name+':configList', f'isa = XCConfigurationList; buildConfigurations = {array(configs)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug;')
++    dependencies = []
++    if ui:
++        proxy = obj(name+':proxy', f'isa = PBXContainerItemProxy; containerPortal = {ident("project")}; proxyType = 1; remoteGlobalIDString = {ident("target")}; remoteInfo = Recomp;')
++        dependencies.append(obj(name+':dependency', f'isa = PBXTargetDependency; target = {ident("target")}; targetProxy = {proxy};'))
++    kind = 'ui-testing' if ui else 'unit-test'
++    target = obj(name+':target', f'isa = PBXNativeTarget; buildConfigurationList = {config_list}; buildPhases = {array(phases)}; buildRules = (); dependencies = {array(dependencies)}; name = {name}; productName = {name}; productReference = {product}; productType = "com.apple.product-type.bundle.{kind}";')
++    return group, product, target, name
++native_tests = add_test_target('RecompNativeTests',
++    sorted((ROOT/'Recomp/Core').glob('*.swift')) + sorted((ROOT/'Tests/RecompCoreTests').glob('*.swift')) +
++    [ROOT/'Recomp/Services/BackupCrypto.swift'] + sorted((ROOT/'TestSupport/NativeTests').glob('*.swift')),
++    fixture='TestSupport/Fixtures/backup-reference.recompbackup')
++ui_tests = add_test_target('RecompUITests', sorted((ROOT/'RecompUITests').glob('*.swift')), ui=True)
++test_targets = [native_tests, ui_tests]
+ src_group = obj('sources', f'isa = PBXGroup; children = {array(source_refs)}; name = Sources; sourceTree = "<group>";')
+ res_group = obj('resources', f'isa = PBXGroup; children = {array(resource_refs)}; name = Resources; sourceTree = "<group>";')
+ framework_group = obj('frameworks', f'isa = PBXGroup; children = {array([health_ref])}; name = Frameworks; sourceTree = "<group>";')
+-product_group = obj('products', f'isa = PBXGroup; children = {array([product, widget_product])}; name = Products; sourceTree = "<group>";')
+-main_group = obj('mainGroup', f'isa = PBXGroup; children = {array([src_group,res_group,widget_group,framework_group,product_group])}; sourceTree = "<group>";')
++product_group = obj('products', f'isa = PBXGroup; children = {array([product, widget_product] + [t[1] for t in test_targets])}; name = Products; sourceTree = "<group>";')
++main_group = obj('mainGroup', f'isa = PBXGroup; children = {array([src_group,res_group,widget_group,framework_group,product_group] + [t[0] for t in test_targets])}; sourceTree = "<group>";')
+ sources_phase = obj('sourcePhase', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {array(source_builds)}; runOnlyForDeploymentPostprocessing = 0;')
+ resources_phase = obj('resourcePhase', f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = {array(resource_builds)}; runOnlyForDeploymentPostprocessing = 0;')
+ frameworks_phase = obj('frameworkPhase', f'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = {array([health_build])}; runOnlyForDeploymentPostprocessing = 0;')
+@@ -89,7 +136,7 @@ for config in ['Debug','Release']:
+     app = {
+         'ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME':'AccentColor',
+         'CODE_SIGN_STYLE':'Automatic','CODE_SIGN_ENTITLEMENTS':'Recomp/Recomp.entitlements',
+-        'DEVELOPMENT_TEAM':args.team,'CURRENT_PROJECT_VERSION':'8','MARKETING_VERSION':'1.7',
++        'DEVELOPMENT_TEAM':args.team,'CURRENT_PROJECT_VERSION':'9','MARKETING_VERSION':'1.7.1',
+         'RECOMP_APP_GROUP':args.app_group,
+         'GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'Recomp/Info.plist',
+         'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks',
+@@ -110,18 +157,21 @@ widget_target = obj('widgetTarget', f'isa = PBXNativeTarget; buildConfigurationL
+ project_config_list = obj('projectConfigList', f'isa = XCConfigurationList; buildConfigurations = {array(project_configs)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
+ target_config_list = obj('targetConfigList', f'isa = XCConfigurationList; buildConfigurations = {array(target_configs)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
+ target = obj('target', f'isa = PBXNativeTarget; buildConfigurationList = {target_config_list}; buildPhases = {array([sources_phase,frameworks_phase,resources_phase,embed_phase])}; buildRules = (); dependencies = {array([widget_dependency])}; name = Recomp; productName = Recomp; productReference = {product}; productType = "com.apple.product-type.application";')
+-project = obj('project', f'''isa = PBXProject; attributes = {{ BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = {{ {target} = {{ CreatedOnToolsVersion = 16.0; SystemCapabilities = {{ com.apple.HealthKit = {{ enabled = 1; }}; com.apple.ApplicationGroups.iOS = {{ enabled = 1; }}; }}; }}; }}; }}; buildConfigurationList = {project_config_list}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = {main_group}; productRefGroup = {product_group}; projectDirPath = ""; projectRoot = ""; targets = {array([target, widget_target])};''')
++project = obj('project', f'''isa = PBXProject; attributes = {{ BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = {{ {target} = {{ CreatedOnToolsVersion = 16.0; SystemCapabilities = {{ com.apple.HealthKit = {{ enabled = 1; }}; com.apple.ApplicationGroups.iOS = {{ enabled = 1; }}; }}; }}; }}; }}; buildConfigurationList = {project_config_list}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = {main_group}; productRefGroup = {product_group}; projectDirPath = ""; projectRoot = ""; targets = {array([target, widget_target] + [t[2] for t in test_targets])};''')
+ project_dir = ROOT / 'Recomp.xcodeproj'
+ project_dir.mkdir(exist_ok=True)
+ (project_dir / 'project.pbxproj').write_text('// !$*UTF8*$!\n{\n\tarchiveVersion = 1;\n\tclasses = {};\n\tobjectVersion = 56;\n\tobjects = {\n'+'\n'.join(objects)+f'\n\t}};\n\trootObject = {project};\n}}\n')
+ 
+ ref = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="Recomp.app" BlueprintName="Recomp" ReferencedContainer="container:Recomp.xcodeproj" />'
++test_refs = [f'<TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{t[2]}" BuildableName="{t[3]}.xctest" BlueprintName="{t[3]}" ReferencedContainer="container:Recomp.xcodeproj" /></TestableReference>' for t in test_targets]
++test_build_refs = ''.join(f'<BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{t[2]}" BuildableName="{t[3]}.xctest" BlueprintName="{t[3]}" ReferencedContainer="container:Recomp.xcodeproj" /></BuildActionEntry>' for t in test_targets)
+ scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
+ <Scheme LastUpgradeVersion="1600" version="1.3">
+   <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries>
+     <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">{ref}</BuildActionEntry>
++    {test_build_refs}
+   </BuildActionEntries></BuildAction>
+-  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables /></TestAction>
++  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables>{"".join(test_refs)}</Testables></TestAction>
+   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0">{ref}</BuildableProductRunnable></LaunchAction>
+   <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0">{ref}</BuildableProductRunnable></ProfileAction>
+   <AnalyzeAction buildConfiguration="Debug" />
+@@ -154,7 +204,7 @@ for filename, content in [('Info.plist', info), ('Recomp.entitlements', {'com.ap
+                                'NSPrivacyCollectedDataTypeTracking': False,
+                                'NSPrivacyCollectedDataTypePurposes': ['NSPrivacyCollectedDataTypePurposeAppFunctionality']}
+                               for kind in ['NSPrivacyCollectedDataTypePhotosorVideos', 'NSPrivacyCollectedDataTypeOtherUserContent', 'NSPrivacyCollectedDataTypeHealth']],
+-                              'NSPrivacyAccessedAPITypes': [{'NSPrivacyAccessedAPIType': 'NSPrivacyAccessedAPICategoryUserDefaults', 'NSPrivacyAccessedAPITypeReasons': ['CA92.1']}]})]:
++                              'NSPrivacyAccessedAPITypes': [{'NSPrivacyAccessedAPIType': 'NSPrivacyAccessedAPICategoryUserDefaults', 'NSPrivacyAccessedAPITypeReasons': ['CA92.1']}, {'NSPrivacyAccessedAPIType':'NSPrivacyAccessedAPICategoryFileTimestamp','NSPrivacyAccessedAPITypeReasons':['C617.1','3B52.1']}]})]:
+     with (ROOT / 'Recomp' / filename).open('wb') as f: plistlib.dump(content, f)
+ print(f'Wrote project with {len(sources)} Swift sources.')
+ 
+@@ -165,6 +215,6 @@ widget_info.update({'CFBundlePackageType':'XPC!', 'CFBundleDisplayName':'Recomp
+ for filename, content in [('Info.plist', widget_info), ('RecompWidget.entitlements', {
+     'com.apple.security.application-groups':['$(RECOMP_APP_GROUP)'],
+     'com.apple.developer.default-data-protection':'NSFileProtectionComplete'}),
+-    ('PrivacyInfo.xcprivacy', {'NSPrivacyTracking':False, 'NSPrivacyCollectedDataTypes':[], 'NSPrivacyAccessedAPITypes':[]})]:
++    ('PrivacyInfo.xcprivacy', {'NSPrivacyTracking':False, 'NSPrivacyCollectedDataTypes':[], 'NSPrivacyAccessedAPITypes':[{'NSPrivacyAccessedAPIType':'NSPrivacyAccessedAPICategoryFileTimestamp','NSPrivacyAccessedAPITypeReasons':['C617.1']}]})]:
+     with (ROOT/'RecompWidget'/filename).open('wb') as f: plistlib.dump(content,f)
+ print('Added embedded WidgetKit extension, App Group setting and native backup document type.')

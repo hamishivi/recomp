@@ -1,0 +1,46 @@
+.DS_Store
+.build/
+.derivedData*/
+DerivedData/
+.swiftpm/
+**/xcuserdata/
+*.xcuserstate
+*.ipa
+*.p12
+*.mobileprovision
+.env
+.env.*
+!.env.example
+
+# Never commit AI credentials or local uploads.
+Server/.env
+Server/.env.*
+!Server/.env.example
+Server/node_modules/
+
+.native-results/
+.derivedData-audit/
+
+.build-*/
+
+# Local diagnostics and device metadata are not source artifacts.
+*.log
+*.xcresult/
+*.xcactivitylog
+Verification/**/*.exit
+Verification/**/environment.txt
+Verification/**/phone-install.txt
+Verification/**/native-results.txt
+
+# Personal diary exports and backups; the interoperability fixture is synthetic.
+diary.json
+*.recompbackup
+!TestSupport/Fixtures/backup-reference.recompbackup
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.key
+*.pem
+__pycache__/
+*.py[cod]

@@ -1,0 +1,6 @@
+{
+  "name": "recomp-estimator", "version": "1.1.0", "private": true,
+  "description": "Single-user, authenticated meal estimation proxy. No dependencies.",
+  "type": "module", "engines": {"node": ">=22"},
+  "scripts": {"start": "node --env-file=.env server.mjs", "test": "node --test"}
+}
