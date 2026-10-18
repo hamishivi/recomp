@@ -158,6 +158,7 @@ struct AppState: Codable, Equatable, Sendable {
     var measurementUnits: MeasurementUnits = .metric
     var dayReviews: [DayReview] = []
     var adaptive = AdaptiveSettings()
+    var energySettings = EnergySettings()
     var targetRevisions: [TargetRevision] = []
     var maintenanceHistory: [MaintenanceSnapshot] = []
     var ignoredHealthBodyIDs: Set<UUID> = []
@@ -166,7 +167,7 @@ struct AppState: Codable, Equatable, Sendable {
     var maintenanceScaleLocationID: UUID? // nil: automatic, within-scale comparisons.
     var healthBodyScaleAssignments: [String: UUID] = [:] // Local annotations, never Health writes.
     var isValid: Bool {
-        schemaVersion == 8 && syncDeletionsAreValid && photoAttachmentsAreValid && activityPreferences.isValid &&
+        schemaVersion == 8 && energySettings.isValid && syncDeletionsAreValid && photoAttachmentsAreValid && activityPreferences.isValid &&
         contextEvents.count <= 10_000 && contextEvents.allSatisfy(\.isValid) && Set(contextEvents.map(\.id)).count == contextEvents.count && dxaHealthIsValid && dxaScansAreValid && scaleLocationsAreValid && measurements.allSatisfy(\.isValid) &&
         Set(measurements.map(\.id)).count == measurements.count &&
         Set(bodyDeletions.map(\.id)).count == bodyDeletions.count &&
@@ -189,7 +190,7 @@ extension AppState {
         case activityPreferences, contextEvents, widgetPreferences
         case dxaScans, dxaHealthEnabled, dxaHealthLinks
         case schemaVersion, targets, entries, templates, deletions, healthEnabled, includeOtherSources
-        case measurements, bodyDeletions, bodyHealthEnabled, measurementUnits, dayReviews, adaptive
+        case measurements, bodyDeletions, bodyHealthEnabled, measurementUnits, dayReviews, adaptive, energySettings
         case targetRevisions, maintenanceHistory, ignoredHealthBodyIDs
         case scaleLocations, lastScaleLocationID, maintenanceScaleLocationID, healthBodyScaleAssignments
     }
@@ -218,6 +219,7 @@ extension AppState {
         measurementUnits = try c.decodeIfPresent(MeasurementUnits.self, forKey: .measurementUnits) ?? .metric
         dayReviews = try c.decodeIfPresent([DayReview].self, forKey: .dayReviews) ?? []
         adaptive = try c.decodeIfPresent(AdaptiveSettings.self, forKey: .adaptive) ?? AdaptiveSettings()
+        energySettings = try c.decodeIfPresent(EnergySettings.self, forKey: .energySettings) ?? EnergySettings()
         targetRevisions = try c.decodeIfPresent([TargetRevision].self, forKey: .targetRevisions) ?? []
         maintenanceHistory = try c.decodeIfPresent([MaintenanceSnapshot].self, forKey: .maintenanceHistory) ?? []
         ignoredHealthBodyIDs = try c.decodeIfPresent(Set<UUID>.self, forKey: .ignoredHealthBodyIDs) ?? []
@@ -415,6 +417,9 @@ extension AppState {
         merged.healthBodyScaleAssignments = self.healthBodyScaleAssignments.merging(other.healthBodyScaleAssignments) { a, _ in a }
         merged.ignoredHealthBodyIDs = self.ignoredHealthBodyIDs.union(other.ignoredHealthBodyIDs)
         merged.activityPreferences.hiddenWorkoutIDs = self.activityPreferences.hiddenWorkoutIDs.union(other.activityPreferences.hiddenWorkoutIDs)
+        if (other.energySettings.updatedAt ?? .distantPast) > (self.energySettings.updatedAt ?? .distantPast) {
+            merged.energySettings = other.energySettings
+        }
 
         // Remote food edits/deletions/additions must invalidate affected reviews
         // on both replicas. A peer snapshot may predate the winning food version.

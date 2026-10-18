@@ -286,7 +286,17 @@ struct IntradayBurnChart: View {
 
     private var modelDetailsView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !curve.hasActivityEstimate {
+            if let energy = curve.energy {
+                Text("\(energy.resting.isMeasured ? "Entered measured RMR" : "Estimated resting energy") · \(energy.resting.kcalPerDay.wholeNumber) kcal/day")
+                    .font(.caption).foregroundStyle(Theme.muted)
+                    .accessibilityIdentifier("burn.resting")
+                Text(curve.calibrationDays > 0 ? "Trend-calibrated movement allowance" : "Movement allowance is provisional")
+                    .font(.caption).foregroundStyle(Theme.muted)
+                if !curve.hasActivityEstimate {
+                    Text("No movement records · everyday activity may be missing")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                }
+            } else if !curve.hasActivityEstimate {
                 Text("No activity data · using maintenance pace")
                     .font(.caption).foregroundStyle(Theme.muted)
             } else {
@@ -300,15 +310,28 @@ struct IntradayBurnChart: View {
             }
             DisclosureGroup("How this is estimated") {
                 VStack(alignment: .leading, spacing: 8) {
-                    if curve.hasActivityEstimate {
+                    if let energy = curve.energy {
+                        Text(isComplete ? "Estimated day breakdown" : "Estimated burn so far").fontWeight(.medium)
+                        InstrumentDatum(title: "Resting · RMR", value: "\(energy.restingSoFar.wholeNumber) kcal")
+                        InstrumentDatum(title: "Everyday movement · NEAT", value: "\((curve.stepBurn + energy.untrackedSoFar).wholeNumber) kcal")
+                        Text("Includes \(energy.untrackedSoFar.wholeNumber) kcal of untracked movement / calibration allowance.")
+                        InstrumentDatum(title: "Exercise · above rest", value: "\(curve.workoutBurn.wholeNumber) kcal")
+                        InstrumentDatum(title: "Digestion · TEF", value: "\(curve.tefBurn.wholeNumber) kcal")
+                        Text(energy.intakeBasis)
+                        if !energy.foodCoverageComplete {
+                            Text("Food coverage is incomplete. Digestion includes \(energy.digestionAllowanceSoFar.wholeNumber) kcal of usual-intake allowance; missing meals are not treated as fasting.")
+                        }
+                        Text(curve.modelNote)
+                        Text("Cunningham 1991 uses fat-free mass, or your manual resting value. Digestion uses macro estimates over a coarse 8-hour window. Resting energy and untracked movement timing are assumptions. These components have not been individually validated.")
+                    } else if curve.hasActivityEstimate {
                         Text(isComplete ? "Estimated day breakdown" : "Estimated burn so far")
                             .fontWeight(.medium)
                         InstrumentDatum(title: "Background", value: "\(curve.backgroundSoFar.wholeNumber) kcal")
                         InstrumentDatum(title: "Walking outside workouts", value: "\(curve.stepBurn.wholeNumber) kcal")
                         InstrumentDatum(title: "Workouts", value: "\(curve.workoutBurn.wholeNumber) kcal")
                     }
-                    if !curve.hasActivityEstimate { Text(curve.modelNote) }
-                    Text("Recomp’s weight, step and workout model; no Apple calorie estimates. Step timing and workout intensity are approximate. Overlapping steps and workouts count once.")
+                    if curve.energy == nil && !curve.hasActivityEstimate { Text(curve.modelNote) }
+                    Text("Recomp calculates energy from the recorded inputs; no Apple calorie estimates are added. Step timing and workout intensity are approximate. Overlapping steps and workouts count once.")
                     if hasForecast {
                         Text("The dashed forecast assumes typical activity for the rest of the day. Future calories are not included in burn so far.")
                     }

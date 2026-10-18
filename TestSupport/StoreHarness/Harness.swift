@@ -286,7 +286,57 @@ import Foundation
         await auth.connectDXAHealth()
         check(!auth.state.dxaHealthEnabled && auth.pendingDXAMetrics == 1 && authH.dxaSaves.isEmpty, "authorization error retains approved choice without false export")
         checks += try await checkFeature17(directory: directory)
+        checks += try await checkEnergy(directory: directory)
         print("\(checks) coordinator checks passed. Mocked adapter only; no native HealthKit or SwiftUI build.")
+    }
+    @MainActor static func checkEnergy(directory: URL) async throws -> Int {
+        var checks = 0
+        func check(_ condition: @autoclosure () -> Bool, _ name: String) {
+            precondition(condition(), "FAILED: \(name)"); checks += 1; print("PASS: \(name)")
+        }
+        let url = directory.appendingPathComponent("energy.json")
+        let health = HealthKitService()
+        let store = DiaryStore(fileURL: url, health: health)
+        let now = Date()
+        let before = store.state
+        let settings = EnergySettings(manualRestingKcal: 1700, manualRestingDate: now.addingTimeInterval(-86400))
+        check(store.saveEnergySettings(settings, now: now), "save component energy settings")
+        check(store.state.energySettings.updatedAt == now, "energy settings carry sync timestamp")
+        check(store.state.targets == before.targets && store.state.adaptive == before.adaptive && store.state.entries == before.entries,
+              "energy settings do not change food targets, adaptive settings or meals")
+        check(health.foodSaves.isEmpty && health.bodySaves.isEmpty && health.dxaSaves.isEmpty, "energy settings do not write Health")
+        let reload = DiaryStore(fileURL: url, health: HealthKitService())
+        check(reload.restingEnergy(asOf: now)?.kcalPerDay == 1700 && reload.state.energySettings == store.state.energySettings,
+              "manual resting value and assumptions survive restart")
+        check(reload.intradayBurnCurve(now: now).energy?.resting.kcalPerDay == 1700, "real chart uses component model")
+        check(reload.intradayBurnCurve(now: now).energy?.foodCoverageComplete == false, "unreviewed food keeps digestion allowance explicit")
+        let saved = reload.state
+        var invalid = settings; invalid.untrackedMovementKcal = -1
+        check(!reload.saveEnergySettings(invalid) && reload.state == saved, "invalid energy setting leaves persisted state intact")
+        invalid = settings; invalid.manualRestingDate = now.addingTimeInterval(86400)
+        check(!reload.saveEnergySettings(invalid, now: now) && reload.state == saved, "future manual resting value rejected atomically")
+        reload.errorMessage = nil
+        check(reload.saveEnergySettings(EnergySettings()), "manual override can be removed")
+        check(reload.restingEnergy() == nil && reload.intradayBurnCurve(now: now).energy == nil, "missing composition retains legacy fallback")
+        check(reload.intradayBurnCurve(now: now).modelNote.contains("not a BMR measurement"), "fallback is not presented as basal energy")
+        let day = DiaryMath.dayInterval(containing: now)
+        var fixture = AppState(); fixture.energySettings = settings
+        let review = DayReview(dayKey: DayReview.key(day.start), timeZoneID: TimeZone.current.identifier,
+            confirmedAt: day.end, total: .startingTargets, estimatedCalorieFraction: 0, includedHealth: false,
+            coverageID: UUID(), coverageStart: day.start, coverageEnd: day.end)
+        fixture.dayReviews = [review]
+        try StateFile(url: url).save(fixture)
+        let complete = DiaryStore(fileURL: url, health: HealthKitService())
+        check(complete.intradayBurnCurve(now: day.end).energy?.foodCoverageComplete == true,
+              "full confirmed day removes missing-food digestion allowance")
+        var excluded = review; excluded.coverageID = UUID(); excluded.excludedFromAnalysis = true
+        excluded.coverageStart = day.start.addingTimeInterval(3600); excluded.coverageEnd = day.start.addingTimeInterval(7200)
+        fixture.dayReviews.append(excluded)
+        try StateFile(url: url).save(fixture)
+        let conflict = DiaryStore(fileURL: url, health: HealthKitService())
+        check(conflict.intradayBurnCurve(now: day.end).energy?.foodCoverageComplete == false,
+              "excluded overlapping review cannot imply complete food coverage")
+        return checks
     }
     @MainActor static func checkFeature17(directory: URL) async throws -> Int {
         var checks = 0

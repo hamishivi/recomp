@@ -270,6 +270,7 @@ final class RecompUITests: XCTestCase {
 
     func testBurnChartInspectionAndDayStates() {
         openBurnPreview()
+        XCTAssertTrue(app.staticTexts["burn.resting"].exists)
         captureBurnChart("Burn - in progress")
         let chart = app.descendants(matching: .any)["burn.chart"].firstMatch
         chart.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).tap()
@@ -298,6 +299,49 @@ final class RecompUITests: XCTestCase {
         app.buttons["How this is estimated"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'No activity data for this day'")).firstMatch.exists)
         captureBurnChart("Burn - maintenance fallback and explanation")
+    }
+
+    func testEnergySettingsPersistManualOverrideAndValidateInputs() {
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["settings.energy"].tap()
+        XCTAssertTrue(app.staticTexts["energy.unavailable"].waitForExistence(timeout: 5))
+        // The native Form exposes the full row as the switch's accessibility
+        // frame; target its visible control, rather than the label's midpoint.
+        app.switches["energy.manual"].coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(app.switches["energy.manual"].value as? String, "1")
+        replace("energy.resting", with: "1700")
+        if app.buttons["Done"].exists { app.buttons["Done"].tap() }
+        captureBurnChart("Energy - manual RMR settings")
+        app.buttons["energy.save"].tap()
+        XCTAssertTrue(app.buttons["settings.energy"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "--reset-test-diary" }
+        app.launch()
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["settings.energy"].tap()
+        XCTAssertEqual(app.textFields["energy.resting"].value as? String, "1700")
+        replace("energy.resting", with: "0")
+        if app.buttons["Done"].exists { app.buttons["Done"].tap() }
+        XCTAssertFalse(app.buttons["energy.save"].isEnabled)
+    }
+
+    func testComponentBreakdownExplainsAllFourSources() {
+        openBurnPreview()
+        let details = app.buttons["How this is estimated"]
+        for _ in 0..<6 { if details.isHittable { break }; app.swipeUp() }
+        details.tap()
+        for _ in 0..<4 {
+            let row = app.staticTexts["Digestion · TEF"]
+            if row.exists && row.frame.maxY < app.frame.maxY - 130 && row.frame.minY > 100 { break }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.75))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.40)))
+        }
+        XCTAssertTrue(app.staticTexts["Resting · RMR"].exists)
+        XCTAssertTrue(app.staticTexts["Everyday movement · NEAT"].exists)
+        XCTAssertTrue(app.staticTexts["Exercise · above rest"].exists)
+        XCTAssertTrue(app.staticTexts["Digestion · TEF"].exists)
+        XCTAssertLessThan(app.staticTexts["Digestion · TEF"].frame.maxY, app.frame.maxY - 130)
+        captureBurnChart("Energy - four component breakdown")
     }
 
     func testBurnChartDarkAppearanceAndLargeText() {

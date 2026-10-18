@@ -18,6 +18,9 @@ struct MaintenanceScreen: View {
                     recommendationCard(report: report)
                     scaleCard
                     activityCard
+                    NavigationLink { EnergySettingsScreen(settings: diary.state.energySettings) } label: {
+                        Label("Energy model settings", systemImage: "flame")
+                    }
                     if !diary.state.maintenanceHistory.isEmpty { historyCard }
                     recentDaysCard
                     NavigationLink("Travel & food coverage") { TravelCoverageScreen() }

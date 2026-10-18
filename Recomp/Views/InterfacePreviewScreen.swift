@@ -85,7 +85,12 @@ private struct BurnChartPreview: View {
         }
         return IntradayBurnCalculator.calculate(dailyBurn: 2400, for: day, now: now,
             workouts: includeActivity ? workouts : [], steps: includeActivity ? history : [],
-            stepIntervals: includeActivity ? steps : [], weightKG: 75)
+            stepIntervals: includeActivity ? steps : [], weightKG: 75,
+            energyInputs: includeActivity ? EnergyInputs(
+                resting: RestingEnergyEstimate(kcalPerDay: 1666, date: day.addingTimeInterval(-86400),
+                    source: "Cunningham 1991 · synthetic 60 kg fat-free mass", fatFreeMassKG: 60),
+                meals: [DigestionEvent(date: day.addingTimeInterval(8 * 3600), kcal: 80)],
+                typicalNutrition: .startingTargets) : nil)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

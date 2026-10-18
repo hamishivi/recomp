@@ -64,6 +64,9 @@ struct SettingsScreen: View {
                     NavigationLink { DXAScansScreen() } label: { Label("DEXA reports & exports", systemImage: "doc.text") }
                 }
                 Section("Preferences") {
+                    NavigationLink { EnergySettingsScreen(settings: diary.state.energySettings) } label: {
+                        Label("Energy model", systemImage: "flame")
+                    }.accessibilityIdentifier("settings.energy")
                     Picker("Measurement units", selection: Binding(get: { diary.state.measurementUnits }, set: { diary.setMeasurementUnits($0) })) {
                         ForEach(MeasurementUnits.allCases) { Text($0.title).tag($0) }
                     }

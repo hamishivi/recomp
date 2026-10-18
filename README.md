@@ -29,9 +29,9 @@ Choosing a meal fills the current draft for review; it is logged only when you p
 
 ## Calorie-burn model
 
-The chart estimates background expenditure, walking outside workouts, and net workout expenditure using weight, steps, and workout records. It does not use Apple's resting- or active-calorie estimates. It separates expenditure so far from future activity forecasts and avoids counting overlapping steps/workouts twice.
+With suitable body composition or a manual resting value, the chart estimates resting metabolism (RMR), everyday movement (NEAT), exercise above rest, and digestion (TEF). Settings → Energy model shows the source and editable assumptions. Automatic RMR uses existing fat-free-mass data; no demographic fields are required. Suitable food, weight and activity history can calibrate the untracked movement allowance, with its uncertainty explained in the chart. Missing resting input retains the maintenance/activity fallback.
 
-These are approximate fitness estimates, not measured metabolism. Activity intensity, incomplete device coverage, food logging errors, water-weight changes, and provisional defaults affect accuracy. The tests establish software behavior, not physiological accuracy. See [the model, assumptions, and limitations](Documentation/Audits/2026-09-25-activity-expenditure.md).
+The chart does not use Apple's resting- or active-calorie estimates. Burn so far is separate from future forecasts, and overlapping steps/workouts count once. Food targets do not automatically increase with exercise. These are approximate fitness estimates: body composition, intensity, device coverage, food errors, water-weight changes and defaults affect accuracy. Tests establish software behavior, not individual physiological accuracy. See [the research, equations and limitations](Documentation/Audits/2026-10-17-component-energy-model.md).
 
 ## Optional AI estimates
 

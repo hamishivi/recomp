@@ -142,13 +142,51 @@ final class DiaryStore: ObservableObject {
     func intradayBurnCurve(workouts: [WorkoutRecord] = [], steps: [StepDay] = [], stepIntervals: [StepInterval] = [], now: Date = Date()) -> IntradayBurnCurve {
         let cutoff = min(now, DiaryMath.dayInterval(containing: selectedDay).end)
         let weight = ScaleMath.latestWeightSeries(bodyPoints, now: cutoff).last
+        let inputs = energyInputs(for: selectedDay, now: now)
         var curve = IntradayBurnCalculator.calculate(
             dailyBurn: trendSummary.estimatedDailyBurn,
             for: selectedDay, now: now, workouts: workouts, steps: steps,
-            stepIntervals: stepIntervals, entries: dayEntries, weightKG: weight?.value ?? 75
+            stepIntervals: stepIntervals, entries: dayEntries, weightKG: weight?.value ?? 75, energyInputs: inputs
         )
         if weight == nil { curve.modelNote += " No weight available: using a provisional 75 kg." }
+        if inputs == nil {
+            curve.modelNote += " Resting energy is unavailable: this background is not a BMR measurement. Add recent suitable body composition or a manual RMR in Energy model settings to enable component estimates."
+        }
         return curve
+    }
+
+    func restingEnergy(asOf date: Date = Date(), settings: EnergySettings? = nil) -> RestingEnergyEstimate? {
+        RestingEnergyCalculator.resolve(settings: settings ?? state.energySettings,
+            points: bodyPoints, scans: state.dxaScans, asOf: date)
+    }
+    private func energyInputs(for day: Date, now: Date) -> EnergyInputs? {
+        let range = DiaryMath.dayInterval(containing: day)
+        let cutoff = min(now, range.end)
+        guard let resting = restingEnergy(asOf: cutoff) else { return nil }
+        let run = CoverageMath.latestRun(state.dayReviews, now: cutoff, lookbackDays: 15)
+        let days = (run.interval?.duration ?? 0) / CoverageMath.day
+        let typical = !run.conflict && days >= 7
+            ? run.reviews.reduce(Nutrition.zero) { $0 + $1.total }.scaled(by: 1 / days) : state.targets
+        let ended = state.dayReviews.filter { $0.isValid && $0.confirmedAt <= now &&
+            $0.coverageInterval.map { $0.end <= now } == true
+        }.sorted { $0.coverageInterval!.start < $1.coverageInterval!.start }
+        let overlaps = ended.filter { $0.coverageInterval!.start < cutoff && $0.coverageInterval!.end > range.start }
+        let conflict = zip(overlaps, overlaps.dropFirst()).contains { $0.coverageInterval!.end > $1.coverageInterval!.start }
+        let complete = cutoff > range.start && !conflict && !overlaps.contains(where: \.excludedFromAnalysis) &&
+            CoverageMath.total(overlaps, from: range.start, to: cutoff) != nil
+        let report = MaintenanceEngine.evaluate(state: state, points: bodyPoints, now: cutoff)
+        let fresh = report.end.map { cutoff.timeIntervalSince($0) >= 0 && cutoff.timeIntervalSince($0) <= 4 * CoverageMath.day } ?? false
+        let stable = report.estimate.map { value in
+            guard let low = report.lower, let high = report.upper else { return false }
+            return high - low <= value * 0.6
+        } ?? false
+        let meals = ThermicEffect.events(entries: state.entries, samples: healthSamples,
+            deletions: nutritionDeletionIdentities, bundleID: health.ownBundleID,
+            includesHealth: state.healthEnabled && state.includeOtherSources,
+            from: range.start.addingTimeInterval(-ThermicEffect.duration), through: cutoff)
+        return EnergyInputs(resting: resting, settings: state.energySettings, meals: meals,
+            typicalNutrition: typical, confirmedFoodDays: run.conflict ? 0 : days,
+            foodCoverageComplete: complete, maintenanceAnchor: fresh && stable ? report.estimate : nil)
     }
 
     var energyBalanceSoFar: Double {
@@ -839,6 +877,17 @@ final class DiaryStore: ObservableObject {
             let numericalChange = settings.goal != next.adaptive.goal || settings.proteinPerKG != next.adaptive.proteinPerKG || settings.fatGrams != next.adaptive.fatGrams
             settings.lastChangedAt = numericalChange ? Date() : next.adaptive.lastChangedAt
             next.adaptive = settings
+        }
+    }
+    @discardableResult
+    func saveEnergySettings(_ settings: EnergySettings, now: Date = Date()) -> Bool {
+        guard settings.isValid, settings.manualRestingDate.map({ $0 <= now }) ?? true else {
+            errorMessage = "Check resting energy, its date, and the movement assumptions."; return false
+        }
+        return commit { next in
+            var saved = settings
+            saved.updatedAt = now
+            next.energySettings = saved
         }
     }
     @discardableResult

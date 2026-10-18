@@ -298,6 +298,7 @@ struct IntradayBurnCurve: Equatable, Sendable {
     var calibrationDays: Int = 0
     var modelNote: String = ""
     var hasActivityEstimate: Bool = false
+    var energy: EnergyBreakdown? = nil
 
     var currentPoint: IntradayBurnPoint? { points.last { !$0.isProjected } }
     var estimatedPoints: [IntradayBurnPoint] { points.filter { !$0.isProjected } }
@@ -381,8 +382,15 @@ enum IntradayBurnCalculator {
         dailyBurn: Double, for day: Date, now: Date = Date(),
         workouts: [WorkoutRecord] = [], steps: [StepDay] = [], stepIntervals: [StepInterval] = [],
         entries: [FoodEntry] = [], weightKG: Double = 75.0,
+        energyInputs: EnergyInputs? = nil,
         calendar: Calendar = .current
     ) -> IntradayBurnCurve {
+        if let energyInputs, energyInputs.isValid,
+           energyInputs.resting.date <= min(now, DiaryMath.dayInterval(containing: day, calendar: calendar).end) {
+            return ComponentExpenditureCalculator.calculate(reference: dailyBurn, for: day, now: now,
+                workouts: workouts, steps: steps, intervals: stepIntervals, weightKG: weightKG,
+                inputs: energyInputs, calendar: calendar)
+        }
         let interval = DiaryMath.dayInterval(containing: day, calendar: calendar)
         let rate = dailyBurn.isFinite && (500...6000).contains(dailyBurn) ? dailyBurn : 2400
         let weight = weightKG.isFinite && (25...350).contains(weightKG) ? weightKG : 75

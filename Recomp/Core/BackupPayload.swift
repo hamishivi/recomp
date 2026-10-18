@@ -62,7 +62,7 @@ extension AppState {
         guard deletions.isEmpty, bodyDeletions.isEmpty, dxaHealthLinks.isEmpty, contextEvents.isEmpty else { return false }
         guard targetRevisions.isEmpty, maintenanceHistory.isEmpty, healthBodyScaleAssignments.isEmpty else { return false }
         guard ignoredHealthBodyIDs.isEmpty, activityPreferences.hiddenWorkoutIDs.isEmpty else { return false }
-        guard targets == .startingTargets, adaptive == AdaptiveSettings() else { return false }
+        guard targets == .startingTargets, adaptive == AdaptiveSettings(), energySettings == EnergySettings() else { return false }
         guard scaleLocations == ScaleLocation.starters, lastScaleLocationID == nil, maintenanceScaleLocationID == nil else { return false }
         let defaults = FoodTemplate.starters
         guard templates.count == defaults.count else { return false }
